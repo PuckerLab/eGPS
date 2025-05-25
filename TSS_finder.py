@@ -1,6 +1,6 @@
 ### Boas Pucker ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.01"
+__version__ = "v0.02"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
@@ -19,8 +19,11 @@ __usage__ = """
 					--bam_is_sorted <PREVENTS_BAM_FILE_SORTING>
 					--samtools <FULL_PATH_TO_SAMTOOLS>[samtools]
 					--bedtools <FULL_PATH_TO_genomeCoverageBed>[genomeCoverageBed]
-					--m <MEM_FOR_SAMTOOLS_SORTING>
-					--threads <NUMBER_THREADS_FOR_SAMTOOLS_SORTING>
+					--m <MEM_FOR_SAMTOOLS_SORTING>[5000000000]
+					--threads <NUMBER_THREADS_FOR_SAMTOOLS_SORTING>[4]
+					--minexon <MINIMAL_EXON_SIZE>[10]
+					--flanksize <FLANKING_REGION_SIZE>[50]
+					--gapsize <COVERAGE_GAP_SIZE>[5]
 					"""
 
 
@@ -369,9 +372,23 @@ def main( arguments ):
 	else:
 		mincov = 1
 	
-	min_exon_size = 10
-	flank_region_for_plot = 50
-	tolerated_gap = 5
+	#minimal exon size
+	if '--minexon' in arguments:
+		min_exon_size = int( arguments[ arguments.index('--minexon')+1 ] )
+	else:
+		min_exon_size = 10
+	
+	#flanking region for plot
+	if '--flanksize' in arguments:
+		flank_region_for_plot = int( arguments[ arguments.index('--flanksize')+1 ] )
+	else:
+		flank_region_for_plot = 50
+	
+	#tolerated coverage gap size (due to sequence variant)
+	if '--gapsize' in arguments:
+		tolerated_gap = int( arguments[ arguments.index('--gapsize')+1 ] )
+	else:
+		tolerated_gap = 5
 	
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
@@ -423,4 +440,3 @@ if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gf
 	main( sys.argv )
 else:
 	sys.exit( __usage__ )
-	
