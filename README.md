@@ -7,7 +7,7 @@ Usage:
   python3 TSS_finder.py [--bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
 
 Mandatory:
-  --cov              STR       Aligned reads coverage file (COV)
+  --cov              STR       Aligned bases coverage file (COV)
   --scov             STR       Spanning read coverage file (COV)
   --bam              STR       BAM file to automatically create the coverage file]
   --fasta            STR       FASTA assembly file for read mapping
@@ -26,8 +26,33 @@ Optional:
   --gapsize          INT       Coverage gap size [5]
 ```
 
+`--cov` full path to the file containing the coverage based on aligned bases.
 
+`--scov` full path to the file containing the coverage based on spanning reads.
 
+`--bam` full path to the BAM file.
+
+`--fasta` full path to the FASTA file containing the genome sequence.
+
+`--gff` full path to the GFF file containing information about all genes.
+
+`--out` full path to output folder. This folder will be created if it does not exist already.
+
+`--mincov` minimal coverage for 5'-UTR identification. Default: 1.
+
+`--samtools` full path to samtools. Default: samtools.
+
+`--bedtools` full path to bedtools genomeCoverageBed. Default: genomeCoverageBed.
+
+`--m` specifies the memory for BAM sorting. Default: 5000000000.
+
+`--threads` specifies the number of threads for sorting of a BAM file via samtools. Default: 4.
+
+`--minexon` specifies the minimal exon size [bp]. Default: 10.
+
+`--flanksize` specifies the flanking size for the plot. Default: 50.
+
+`--gapsize` specifies the gap size in coverage due to sequence variants between RNA-seq reads and reference. Default: 5.
 
 
 # References
