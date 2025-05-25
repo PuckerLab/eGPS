@@ -1,3 +1,56 @@
+### Boas Pucker ###
+### pucker@uni-bonn.de ###
+__version__ = "v0.01"
+
+__reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
+
+__usage__ = """
+					TSS_finder """ + __version__ + """("""+ __reference__ +""")
+					
+					Usage:
+					python3 TSS_finder.py
+					--fasta <GENOMIC_FASTA_FILE>
+					--gff <GFF_FILE>
+					--out <OUTPUT_FOLDER>
+					[--bam <BAM_FILE>|--cov <COV_FILE> --scov <SCOV_FILE>]
+					
+					optional:
+					--mincov <MINIMAL_COVERAGE>[1]
+					--bam_is_sorted <PREVENTS_BAM_FILE_SORTING>
+					--samtools <FULL_PATH_TO_SAMTOOLS>[samtools]
+					--bedtools <FULL_PATH_TO_genomeCoverageBed>[genomeCoverageBed]
+					--m <MEM_FOR_SAMTOOLS_SORTING>
+					--threads <NUMBER_THREADS_FOR_SAMTOOLS_SORTING>
+					"""
+
+
+import os, sys, subprocess, gzip
+try:
+	import matplotlib.pyplot as plt
+except ImportError:
+	pass
+
+# --- end of imports --- #
+
+def construct_cov_file( bam_file, cov_file, bedtools ):
+	""" @brief calculate read coverage depth per position """
+	
+	print ( "calculating coverage per position ...." )
+	cmd = bedtools + " -d -split -ibam " + bam_file + " > " + cov_file	#-split ignored spanning reads when calculating depth
+	p = subprocess.Popen( args= cmd, shell=True )
+	p.communicate()
+	return cov_file
+
+
+def construct_scov_file( bam_file, scov_file, bedtools ):
+	""" @brief calculate read coverage depth per position """
+	
+	print ( "calculating coverage per position (spanning) ...." )
+	cmd = bedtools + " -d -ibam " + bam_file + " > " + scov_file	#-split ignored spanning reads when calculating depth
+	p = subprocess.Popen( args= cmd, shell=True )
+	p.communicate()
+	return scov_file
+
 
 def load_coverage( cov_file, input_mode ):
 	"""! @brief load coverage per genomic position """
@@ -21,6 +74,7 @@ def load_gene_infos( gff_file ):
 	"""! @brief load gene ID, position, and orientation from GFF3 file """
 	
 	gene_infos = {}
+	genes_per_chromosome = {}
 	with open( gff_file, "r" ) as f:
 		line = f.readline()
 		while line:
@@ -30,9 +84,13 @@ def load_gene_infos( gff_file ):
 					ID = parts[-1].split('ID=')[-1]
 					if ";" in ID:
 						ID = ID.split(';')[0]
-					gene_infos.update( { ID: { 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } } )
+					gene_infos.update( { ID: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } } )
+					try:
+						genes_per_chromosome[ parts[0] ].append( ID )
+					except KeyError:
+						genes_per_chromosome.update( { parts[0]: [ ID ] } )
 			line = f.readline()
-	return gene_infos
+	return gene_infos, genes_per_chromosome
 
 
 def load_sequences( fasta_file ):
@@ -59,53 +117,164 @@ def load_sequences( fasta_file ):
 	return sequences
 
 
+def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation ):
+	"""! @brief generate a coverage plot """
+	
+	fig, ax1 = plt.subplots()
+	ax1.plot( values, color="black", linestyle="solid" )	#coverage of aligned bases
+	ax2 = ax1.twinx()
+	ax2.plot( svalues, color="red", linestyle="dotted" )	#coverage of spanning reads
+	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted" )	#ATG position
+	
+	ax1.set_title( gene + "   (" + orientation + ")" )
+	ax1.set_xlabel( str( genomic_start ) + "          " + str( genomic_end ) )
+	ax1.set_ylabel( "aligned RNA-seq coverage" )
+	ax2.set_ylabel( "spanning RNA-seq coverage" )
+	
+	fig.savefig( fig_file, dpi=300 )
+
+
+def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap ):
+	"""! @brief run analysis on forward strand """
+	
+	most_upstream_pos = start - 1
+	final_pos_status = False
+	while not final_pos_status:
+		
+		# --- walk coverage upstream of transcription start while there is coverage --- #
+		while cov_per_contig[ most_upstream_pos-2 ] >= mincov:	#index = genomic position -1 (explains -2)
+			most_upstream_pos -= 1	#move one step upstream
+			if most_upstream_pos == hard_cutoff:	#stop if start of contig/pseudochromosome is reached
+				break
+		
+		# --- try to cross intron --- #
+		current_position = most_upstream_pos - 1	#most_upstream_pos has coverage above cutoff (position, not index!)
+		if current_position > hard_cutoff:
+			while cov_per_contig[ current_position - 1 ] < mincov:	#check if upstream position has low coverage
+				current_position -= 1	#move one step upstream
+				if current_position == hard_cutoff:
+					break
+		else:
+			final_pos_status = True
+		
+		avg_gap_coverage = sum( scov_per_contig[ current_position:most_upstream_pos ] )/(most_upstream_pos-current_position)
+		#average coverage in intron should be very low
+		if current_position > min_exon_size and avg_gap_coverage > mincov:
+			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
+			donor_splice_site = seq_per_contig[ current_position:current_position+2 ].upper()	#this should be GT
+			acceptor_splice_site = seq_per_contig[ most_upstream_pos-2:most_upstream_pos ].upper()	#this should be AG
+			print( "donor splice site: " + donor_splice_site )
+			print( "acceptor splice site: " + acceptor_splice_site )
+			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
+				most_upstream_pos = current_position - 1
+			elif most_upstream_pos - current_position < tolerated_gap:
+				most_upstream_pos = current_position - 1
+			else:
+				final_pos_status = True
+		else:
+			final_pos_status = True
+	print( "TSS position of " + gene + ": " + str( most_upstream_pos ) )
+	
+	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
+	if most_upstream_pos > flank_region_for_plot:
+		plot_start_region = most_upstream_pos - flank_region_for_plot
+	else:
+		plot_start_region = 0
+	plot_end_region = start + flank_region_for_plot
+	
+	values = cov_per_contig[ plot_start_region:plot_end_region ]
+	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
+	atg_pos = len( svalues )-50
+	genomic_start, genomic_end = plot_start_region, plot_end_region
+	orientation = "+"
+	
+	try:
+		generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation )
+	except:
+		print( "ERROR: plot failed" + gene )
+		
+	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
+
+
+def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap ):
+	"""! @brief run analysis on reverse strand """
+	
+	most_downstream_pos = end + 1
+	final_pos_status = False
+	while not final_pos_status:
+		
+		# --- walk coverage upstream of transcription start while there is coverage --- #
+		while cov_per_contig[ most_downstream_pos ] >= mincov:	#index = next genomic position
+			most_downstream_pos += 1	#move one step downstream
+			if most_downstream_pos == hard_cutoff:	#stop if end of contig/pseudochromosome is reached
+				break
+		
+		# --- try to cross intron --- #
+		current_position = most_downstream_pos + 1	#most_downstream_pos has coverage above cutoff (position, not index!)
+		if current_position < hard_cutoff:
+			while cov_per_contig[ current_position + 1 ] < mincov:	#check if downstream position has low coverage
+				current_position += 1	#move one step downstream
+				if current_position == hard_cutoff:
+					break
+		else:
+			final_pos_status = True
+		
+		avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos:current_position ] )/( current_position-most_downstream_pos )
+		#average coverage in intron should be very low
+		if current_position < ( len( seq_per_contig ) - min_exon_size ) and avg_gap_coverage > mincov:
+			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
+			acceptor_splice_site = seq_per_contig[ current_position-2:current_position ].upper()	#this should be AG	
+			donor_splice_site = seq_per_contig[ most_downstream_pos:most_downstream_pos+2 ].upper()	#this should be GT
+			print( "donor splice site: " + donor_splice_site )
+			print( "acceptor splice site: " + acceptor_splice_site )
+			if donor_splice_site == "AC" and acceptor_splice_site == "CT":	#reverse sequences of GT-AG
+				most_downstream_pos = current_position - 1
+			elif current_position - most_downstream_pos < tolerated_gap:
+				most_downstream_pos = current_position + 1
+			else:
+				final_pos_status = True
+		else:
+			final_pos_status = True
+	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
+	
+	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
+	plot_start_region = end + flank_region_for_plot
+	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
+		plot_end_region = most_downstream_pos + flank_region_for_plot
+	else:
+		plot_end_region = len( seq_per_contig )
+		
+	values = cov_per_contig[ plot_start_region:plot_end_region ]
+	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
+	atg_pos = len( svalues )-50
+	genomic_start, genomic_end = plot_start_region, plot_end_region
+	orientation = "-"
+	
+	try:
+		generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation )
+	except:
+		print( "ERROR: plot failed" + gene )
+		
+	return { 'TSS': most_downstream_pos, 'start': start, 'end': end }
+
+
+def find_flanking_genes( gene, gene_infos, genes_per_chromosome ):
+	"""! @brief find upstream and downstream genes """
+	
+	up_gene = False
+	down_gene = False
+	chromosome = gene_infos[ gene ]['chromosome']
+	gene_order = genes_per_chromosome[ chromosome ]
+	index = gene_order.index( gene )
+	if index > 0:
+		up_gene = gene_order[ index-1 ]
+	if index < len( gene_order )-1:
+		down_gene = gene_order[ index+1 ]
+	return up_gene, down_gene
+	
 
 def main( arguments ):
 	"""! @brief run everything """
-	
-	#input: BAM/COV file via --in with correct file name extension
-	#or BAM file via --bam
-	#or COV file via --cov
-	
-	if '--in' in arguments:
-		input_file = arguments[ arguments.index('--in')+1 ]
-		try:
-			if input_file.split('.')[-1].lower() == "bam":
-				bam_file = input_file
-				cov_file = ""
-				input_mode = "bam"
-			elif input_file.split('.')[-1].lower() == "cov":
-				cov_file = input_file
-				cov_file = ""
-				input_mode = "cov"
-			elif input_file.split('.')[-1].lower() == "gz" and input_file.split('.')[-2].lower() == "bam":
-				cov_file = input_file
-				bam_file = ""
-				input_mode = "bam_gz"
-			elif input_file.split('.')[-1].lower() == "gz" and input_file.split('.')[-2].lower() == "cov":
-				cov_file = input_file
-				bam_file = ""
-				input_mode = "cov_gz"
-			
-			else:
-				sys.exit( "ERROR: unrecognized input file type. If you file is a BAM or COV file, please ensure that it has the proper file name extension (.bam or .cov). Gziped versions are supported (.bam.gz or .cov.gz). #else" )
-		except:
-			sys.exit( "ERROR: unrecognized input file type. If you file is a BAM or COV file, please ensure that it has the proper file name extension (.bam or .cov). Gziped versions are supported (.bam.gz or .cov.gz). #except" )
-	elif '--bam' in arguments:
-		bam_file = arguments[ arguments.index('--bam')+1 ]
-		if bam_file.split('.')[-1].lower() == "gz":
-			input_mode = "bam_gz"
-		else:
-			input_mode = "bam"
-		cov_file = ""
-	elif '--cov' in arguments:
-		cov_file = arguments[ arguments.index('--cov')+1 ]
-		if cov_file.split('.')[-1].lower() == "gz":
-			input_mode = "cov_gz"
-		else:
-			input_mode = "cov"
-		bam_file = ""
-	
 	
 	#input: GFF file with gene positions (translation start sites)
 	gff_file = arguments[ arguments.index('--gff')+1 ]
@@ -127,44 +296,131 @@ def main( arguments ):
 			for line in lines:
 				if len( line.strip() ) > 3:
 					goi.append( line.strip() )
-	
 	print( "Number of detected genes of interest: " + str( len( goi ) ) )
 	
+	#output folder
 	output_folder = arguments[ arguments.index('--out')+1 ]
 	if output_folder[-1] != "/":
 		output_folder += "/"
 	if not os.path.exists( output_folder ):
 		os.makedirs( output_folder )
 	
+	if '--bam' in arguments:
+		bam_file = arguments[ arguments.index('--bam')+1 ]
+				
+		if '--bam_is_sorted' in arguments:
+			bam_sorted_status = True
+		else:
+			bam_sorted_status = False
+		
+		if '--samtools' in arguments:
+			samtools = arguments[ arguments.index( '--samtools' )+1 ]
+		else:
+			samtools = "samtools"
+	
+		if '--bedtools' in arguments:
+			bedtools = arguments[ arguments.index( '--bedtools' )+1 ]
+		else:
+			bedtools = "genomeCoverageBed"
+	
+		if '--m' in arguments:
+			m = arguments[ arguments.index( '--m' )+1 ]
+		else:
+			m = "5000000000"
+		
+		if '--threads' in arguments:
+			t = arguments[ arguments.index( '--threads' )+1 ]
+		else:
+			t = "4"
+		
+		if not bam_sorted_status:	#sorting the BAM file if it was not sorted already
+			print ("sorting BAM file ...")
+			sorted_bam_file = output_folder + "sorted.bam"
+			cmd = samtools + " sort -m " + m + " --threads " + t + " " + bam_file + " > " + sorted_bam_file
+			p = subprocess.Popen( args= cmd, shell=True )
+			p.communicate()
+		
+		cov_file = output_folder + "reads_aligned.cov"
+		scov_file = output_folder + "reads_spanning.cov"
+		
+		if bam_sorted_status:
+			if not os.path.isfile( cov_file ):
+				construct_cov_file( bam_file, cov_file, bedtools )
+			if not os.path.isfile( scov_file ):
+				construct_scov_file( bam_file, scov_file, bedtools )
+		else:
+			if not os.path.isfile( cov_file ):
+				construct_cov_file( sorted_bam_file, cov_file, bedtools )
+			if not os.path.isfile( scov_file ):
+				construct_scov_file( sorted_bam_file, scov_file, bedtools )
+		input_mode = "cov"
+		
+	else:
+		cov_file = arguments[ arguments.index('--cov')+1 ]
+		scov_file = arguments[ arguments.index('--scov')+1 ]
+		if cov_file.split('.')[-1].lower() == "gz":
+			input_mode = "gz"
+		else:
+			input_mode = "cov"
+
 	#coverage cutoff
 	if '--mincov' in arguments:
 		mincov = int( arguments[ arguments.index('--mincov')+1 ] )
 	else:
 		mincov = 1
 	
-	#ADD TOOL FOR BAM TO COV CONVERSION
-	
-	#CONVERT BAM TO COV IF NECESSARY
+	min_exon_size = 10
+	flank_region_for_plot = 50
+	tolerated_gap = 5
 	
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
+	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos = load_gene_infos( gff_file )
+	gene_infos, genes_per_chromosome = load_gene_infos( gff_file )
 	
 	genome_seq = load_sequences( fasta_file )
 	
 	#run analysis per gene of interest
-	
-	#walk coverage upstream of transcription start
-	
-	#check coverage gaps for (canonical) splice sites to continue across introns
-	
-	#identify most 5' position with coverage above coverage cutoff
-	
-	#(invert everything for genes on reverse strand)
-	
-	#report TSS in output file
-	
-	#generate figures to visualize coverage around the TSS for manual inspection (coverage plot for whole gene + zoomed version for TSS)
+	results = {}
+	for gene in goi:
+		cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
+		scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
+		seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
+		start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
+		upstream_gene, downstream_gene = find_flanking_genes( gene, gene_infos, genes_per_chromosome )
+		
+		if orientation == "+":	#only works on forward strand
+			fig_file = output_folder + gene + ".png"
+			if upstream_gene:
+				hard_cutoff = gene_infos[ upstream_gene ]['end']
+			else:
+				hard_cutoff = 1
+			result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap )
+			results.update( { gene: result } )
+		else:	#solution for reverse strand genes
+			fig_file = output_folder + gene + ".png"
+			if downstream_gene:
+				hard_cutoff = gene_infos[ downstream_gene ]['start']
+			else:
+				hard_cutoff = len( seq_per_contig )
+			result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap )
+			results.update( { gene: result } )
+		
+	# --- report TSS in output file --- #
+	final_output_file = output_folder + "results.txt"
+	with open( final_output_file, "w" ) as out:
+		out.write( "\t".join( [ "GeneID", "TSS", "Start", "End" ] ) + "\n" )
+		for gene in list( results.keys() ):
+			out.write( "\t".join( [ 	gene,
+											str( results[ gene ]['TSS'] ),
+											str( results[ gene ]['start'] ),
+											str( results[ gene ]['end'] ) 
+										] ) + "\n" )
 
 
+if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
+	main( sys.argv )
+else:
+	sys.exit( __usage__ )
+	
