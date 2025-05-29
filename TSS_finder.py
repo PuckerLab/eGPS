@@ -1,6 +1,6 @@
 ### Boas Pucker ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.02"
+__version__ = "v0.022"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
@@ -24,6 +24,7 @@ __usage__ = """
 					--minexon <MINIMAL_EXON_SIZE>[10]
 					--flanksize <FLANKING_REGION_SIZE>[50]
 					--gapsize <COVERAGE_GAP_SIZE>[5]
+					--splicesites <HANDLING_OF_SPLICE_SITES>[strict](strict|off)
 					"""
 
 
@@ -137,7 +138,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_en
 	fig.savefig( fig_file, dpi=300 )
 
 
-def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap ):
+def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on forward strand """
 	
 	most_upstream_pos = start - 1
@@ -170,6 +171,8 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			print( "acceptor splice site: " + acceptor_splice_site )
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
 				most_upstream_pos = current_position - 1
+			elif splicesites == "off":	#ignore check for canonical splice sites
+				most_upstream_pos = current_position - 1
 			elif most_upstream_pos - current_position < tolerated_gap:
 				most_upstream_pos = current_position - 1
 			else:
@@ -199,7 +202,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
 
 
-def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap ):
+def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on reverse strand """
 	
 	most_downstream_pos = end + 1
@@ -232,6 +235,8 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			print( "acceptor splice site: " + acceptor_splice_site )
 			if donor_splice_site == "AC" and acceptor_splice_site == "CT":	#reverse sequences of GT-AG
 				most_downstream_pos = current_position - 1
+			elif splicesites == "off":	#ignore check for canonical splice sites
+				most_downstream_pos = current_position - 1
 			elif current_position - most_downstream_pos < tolerated_gap:
 				most_downstream_pos = current_position + 1
 			else:
@@ -241,7 +246,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
 	
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
-	plot_start_region = end + flank_region_for_plot
+	plot_start_region = end - flank_region_for_plot
 	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
 		plot_end_region = most_downstream_pos + flank_region_for_plot
 	else:
@@ -249,7 +254,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
-	atg_pos = len( svalues )-50
+	atg_pos = flank_region_for_plot + 0
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
 	
@@ -390,6 +395,14 @@ def main( arguments ):
 	else:
 		tolerated_gap = 5
 	
+	if '--splicesites' in arguments:
+		splicesites = arguments[ arguments.index('--splicesites')+1 ]
+		if splicesites not in [ "strict", "off" ]:
+			splicesites = "strict"
+			print( "WARNING: splice site handling set to strict due to unrecognized user input." )
+	else:
+		splicesites = "strict"
+	
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
@@ -401,28 +414,31 @@ def main( arguments ):
 	#run analysis per gene of interest
 	results = {}
 	for gene in goi:
-		cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
-		scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
-		seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
-		start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
-		upstream_gene, downstream_gene = find_flanking_genes( gene, gene_infos, genes_per_chromosome )
-		
-		if orientation == "+":	#only works on forward strand
-			fig_file = output_folder + gene + ".png"
-			if upstream_gene:
-				hard_cutoff = gene_infos[ upstream_gene ]['end']
-			else:
-				hard_cutoff = 1
-			result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap )
-			results.update( { gene: result } )
-		else:	#solution for reverse strand genes
-			fig_file = output_folder + gene + ".png"
-			if downstream_gene:
-				hard_cutoff = gene_infos[ downstream_gene ]['start']
-			else:
-				hard_cutoff = len( seq_per_contig )
-			result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap )
-			results.update( { gene: result } )
+		try:
+			cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
+			scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
+			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
+			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
+			upstream_gene, downstream_gene = find_flanking_genes( gene, gene_infos, genes_per_chromosome )
+			
+			if orientation == "+":	#only works on forward strand
+				fig_file = output_folder + gene + ".png"
+				if upstream_gene:
+					hard_cutoff = gene_infos[ upstream_gene ]['end']
+				else:
+					hard_cutoff = 1
+				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				results.update( { gene: result } )
+			else:	#solution for reverse strand genes
+				fig_file = output_folder + gene + ".png"
+				if downstream_gene:
+					hard_cutoff = gene_infos[ downstream_gene ]['start']
+				else:
+					hard_cutoff = len( seq_per_contig )
+				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				results.update( { gene: result } )
+		except KeyError:
+			print( "Missing gene error: " + gene )
 		
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
