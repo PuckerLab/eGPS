@@ -1,6 +1,6 @@
 ### Boas Pucker ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.022"
+__version__ = "v0.023"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
@@ -281,6 +281,39 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome ):
 	return up_gene, down_gene
 	
 
+def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size=50, max_promoter_size=1000 ):
+	"""! @brief extract promoter region """
+	
+	tss = result['TSS']
+	gene_start = result['start']
+	gene_end = result['end']
+	if orientation == "+":	#forward strand	
+		if hard_cutoff - tss > min_promoter_size:
+			if hard_cutoff - tss > max_promoter_size:
+				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
+				promoter_status = True
+			else:
+				promoter = seq_per_contig[ hard_cutoff:tss ]
+				promoter_status = True
+		else:
+			#no promoter detected (returning everything upstream of start codon
+			promoter = seq_per_contig[ hard_cutoff:gene_start ]
+			promoter_status = False
+	else:	#reverse strand
+		if tss - hard_cutoff > min_promoter_size:
+			if tss - hard_cutoff > max_promoter_size:
+				promoter = seq_per_contig[ tss:tss+max_promoter_size ]
+				promoter_status = True
+			else:
+				promoter = seq_per_contig[ tss:hard_cutoff ]
+				promoter_status = True
+		else:
+			#no promoter detected (returning everything upstream of start codon
+			promoter = seq_per_contig[ gene_end:hard_cutoff ]
+			promoter_status = False
+	return promoter_status, promoter
+
+
 def main( arguments ):
 	"""! @brief run everything """
 	
@@ -403,6 +436,11 @@ def main( arguments ):
 	else:
 		splicesites = "strict"
 	
+	
+	min_promoter_size=50
+	max_promoter_size=1000
+	
+	
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
@@ -428,6 +466,9 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				result.update( { 'promoter_status': promoter_status } )
+				result.update( { 'promoter': promoter } )
 				results.update( { gene: result } )
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
@@ -436,6 +477,9 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				result.update( { 'promoter_status': promoter_status } )
+				result.update( { 'promoter': promoter } )
 				results.update( { gene: result } )
 		except KeyError:
 			print( "Missing gene error: " + gene )
@@ -443,12 +487,14 @@ def main( arguments ):
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Start", "End" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
-											str( results[ gene ]['TSS'] ),
-											str( results[ gene ]['start'] ),
-											str( results[ gene ]['end'] ) 
+												str( results[ gene ]['TSS'] ),
+												str( results[ gene ]['start'] ),
+												str( results[ gene ]['end'] ),
+												str( results[ gene ]['promoter_status'] ),
+												str( results[ gene ]['promoter'] )
 										] ) + "\n" )
 
 
