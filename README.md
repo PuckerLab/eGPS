@@ -24,6 +24,7 @@ Optional:
   --minexon          INT       Minimal exon size [10]
   --flanksize        INT       Flanking region size in plot [50]
   --gapsize          INT       Coverage gap size [5]
+  --splicesites      STR       Handling of splice sites[strict](strict|off)
 ```
 
 `--cov` full path to the file containing the coverage based on aligned bases.
@@ -53,6 +54,8 @@ Optional:
 `--flanksize` specifies the flanking size for the plot. Default: 50.
 
 `--gapsize` specifies the gap size in coverage due to sequence variants between RNA-seq reads and reference. Default: 5.
+
+`--splicesites` specifies the handling of putative introns. Modes: strict, off. strict enforces a check for canonical splice sites at the ends of a putative intron. off enables the consideration of introns without canonical splice sites. Default: strict.
 
 
 # References
