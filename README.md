@@ -1,5 +1,9 @@
 # TSS_finder
+
+## Background
 This tool was developed to identify transcription start sites (TSS) in plants based on RNA-seq data coverage. The approach looks for the most 5' position upstream of a start codon (ATG) that is covered by RNA-seq reads. The coverage of aligned reads and the coverage of spanning reads are considered in this analysis. Input for the analysis is an RNA-seq read mapping (BAM file). The genome sequence and positions of genes are required for the TSS identification.
+
+## Usage
 
 
 ```
@@ -58,6 +62,6 @@ Optional:
 `--splicesites` specifies the handling of putative introns. Modes: strict, off. strict enforces a check for canonical splice sites at the ends of a putative intron. off enables the consideration of introns without canonical splice sites. Default: strict.
 
 
-# References
+## References
 Cite this repository.
 
