@@ -1,6 +1,6 @@
 ### Boas Pucker ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.023"
+__version__ = "v0.0231"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
@@ -131,9 +131,11 @@ def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_en
 	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted" )	#ATG position
 	
 	ax1.set_title( gene + "   (" + orientation + ")" )
-	ax1.set_xlabel( str( genomic_start ) + "          " + str( genomic_end ) )
+	ax1.set_xlabel( "position in genomic region from " + str( genomic_start ) + " to " + str( genomic_end ) )
 	ax1.set_ylabel( "aligned RNA-seq coverage" )
+	ax1.yaxis.label.set_color('black')
 	ax2.set_ylabel( "spanning RNA-seq coverage" )
+	ax2.yaxis.label.set_color('red')
 	
 	fig.savefig( fig_file, dpi=300 )
 
