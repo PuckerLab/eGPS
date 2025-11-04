@@ -94,8 +94,9 @@ def load_gene_infos( gff_file ):
 					except KeyError:
 						genes_per_chromosome.update( { parts[0]: [ ID ] } )
 			line = f.readline()
+	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
+		genes_per_chromosome[chromosome].sort(key=lambda gene: gene_infos[gene]['start'])
 	return gene_infos, genes_per_chromosome
-
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
