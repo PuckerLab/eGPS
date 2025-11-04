@@ -148,7 +148,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	while not final_pos_status:
 		
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_upstream_pos-2 ] >= mincov:	#index = genomic position -1 (explains -2)
+		while cov_per_contig[ most_upstream_pos-1 ] >= mincov:	#index = genomic position -1
 			most_upstream_pos -= 1	#move one step upstream
 			if most_upstream_pos == hard_cutoff:	#stop if start of contig/pseudochromosome is reached
 				break
@@ -212,7 +212,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	while not final_pos_status:
 		
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_downstream_pos ] >= mincov:	#index = next genomic position
+		while cov_per_contig[ most_downstream_pos - 1 ] >= mincov:	#index = next genomic position
 			most_downstream_pos += 1	#move one step downstream
 			if most_downstream_pos == hard_cutoff:	#stop if end of contig/pseudochromosome is reached
 				break
@@ -220,7 +220,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		# --- try to cross intron --- #
 		current_position = most_downstream_pos + 1	#most_downstream_pos has coverage above cutoff (position, not index!)
 		if current_position < hard_cutoff:
-			while cov_per_contig[ current_position + 1 ] < mincov:	#check if downstream position has low coverage
+			while cov_per_contig[ current_position -1 ] < mincov:	#check if downstream position has low coverage
 				current_position += 1	#move one step downstream
 				if current_position == hard_cutoff:
 					break
