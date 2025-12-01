@@ -50,7 +50,7 @@ def construct_scov_file( bam_file, scov_file, bedtools ):
 	""" @brief calculate read coverage depth per position """
 	
 	print ( "calculating coverage per position (spanning) ...." )
-	cmd = bedtools + " -d -ibam " + bam_file + " > " + scov_file	#-split ignored spanning reads when calculating depth
+	cmd = bedtools + " -d -ibam " + bam_file + " > " + scov_file	#-include spanning reads when calculating depth
 	p = subprocess.Popen( args= cmd, shell=True )
 	p.communicate()
 	return scov_file
@@ -157,19 +157,19 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		# --- try to cross intron --- #
 		current_position = most_upstream_pos - 1	#most_upstream_pos has coverage above cutoff (position, not index!)
 		if current_position > hard_cutoff:
-			while cov_per_contig[ current_position - 1 ] < mincov:	#check if upstream position has low coverage
+			while cov_per_contig[ current_position - 2 ] < mincov:	#check if upstream position has low coverage
 				current_position -= 1	#move one step upstream
 				if current_position == hard_cutoff:
 					break
 		else:
 			final_pos_status = True
 		
-		avg_gap_coverage = sum( scov_per_contig[ current_position:most_upstream_pos ] )/(most_upstream_pos-current_position)
+		avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
 		#average coverage in intron should be very low
 		if current_position > min_exon_size and avg_gap_coverage > mincov:
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-			donor_splice_site = seq_per_contig[ current_position:current_position+2 ].upper()	#this should be GT
-			acceptor_splice_site = seq_per_contig[ most_upstream_pos-2:most_upstream_pos ].upper()	#this should be AG
+			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
+			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
 			print( "donor splice site: " + donor_splice_site )
 			print( "acceptor splice site: " + acceptor_splice_site )
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
@@ -193,7 +193,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
-	atg_pos = len( svalues )-50
+	atg_pos = len( svalues )-flank_region_for_plot
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
 	
@@ -502,6 +502,8 @@ def main( arguments ):
 
 
 if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
+	main( sys.argv )
+elif '--cov' in sys.argv and '--scov' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
 	main( sys.argv )
 else:
 	sys.exit( __usage__ )
