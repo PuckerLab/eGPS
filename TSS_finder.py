@@ -144,7 +144,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_en
 def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on forward strand """
 	
-	most_upstream_pos = start - 1
+	most_upstream_pos = start
 	final_pos_status = False
 	while not final_pos_status:
 		
@@ -172,6 +172,8 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
 			print( "donor splice site: " + donor_splice_site )
 			print( "acceptor splice site: " + acceptor_splice_site )
+			print("current position is " + str( current_position ) )
+			print ("most upstream position is " + str( most_upstream_pos ) )
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
 				most_upstream_pos = current_position - 1
 			elif splicesites == "off":	#ignore check for canonical splice sites
