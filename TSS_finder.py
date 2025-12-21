@@ -143,13 +143,14 @@ def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_en
 
 def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on forward strand """
-	
+	if gene == "AT1G01046":
+		print("hard cutoff for the overlapping gene TSS analysis is "+ str(hard_cutoff))
 	most_upstream_pos = start
 	final_pos_status = False
 	while not final_pos_status:
 		
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_upstream_pos-1 ] >= mincov:	#index = genomic position -1
+		while cov_per_contig[ most_upstream_pos-2 ] >= mincov:	#index = genomic position -1 but coverage of gene that is next to the current position needs to be assessed before moving in there
 			most_upstream_pos -= 1	#move one step upstream
 			if most_upstream_pos == hard_cutoff:	#stop if start of contig/pseudochromosome is reached
 				break
@@ -167,6 +168,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
 		#average coverage in intron should be very low
 		if current_position > min_exon_size and avg_gap_coverage > mincov:
+			print("avg spanning gap coverage is "+str(avg_gap_coverage))
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
 			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
@@ -210,12 +212,12 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on reverse strand """
 	
-	most_downstream_pos = end + 1
+	most_downstream_pos = end
 	final_pos_status = False
 	while not final_pos_status:
 		
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_downstream_pos - 1 ] >= mincov:	#index = next genomic position
+		while cov_per_contig[ most_downstream_pos ] >= mincov:	#index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
 			most_downstream_pos += 1	#move one step downstream
 			if most_downstream_pos == hard_cutoff:	#stop if end of contig/pseudochromosome is reached
 				break
@@ -223,25 +225,25 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		# --- try to cross intron --- #
 		current_position = most_downstream_pos + 1	#most_downstream_pos has coverage above cutoff (position, not index!)
 		if current_position < hard_cutoff:
-			while cov_per_contig[ current_position -1 ] < mincov:	#check if downstream position has low coverage
+			while cov_per_contig[ current_position] < mincov:	#check if downstream position has low coverage
 				current_position += 1	#move one step downstream
 				if current_position == hard_cutoff:
 					break
 		else:
 			final_pos_status = True
 		
-		avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos:current_position ] )/( current_position-most_downstream_pos )
+		avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos-1:current_position-1] )/( current_position-most_downstream_pos )
 		#average coverage in intron should be very low
 		if current_position < ( len( seq_per_contig ) - min_exon_size ) and avg_gap_coverage > mincov:
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-			acceptor_splice_site = seq_per_contig[ current_position-2:current_position ].upper()	#this should be AG	
-			donor_splice_site = seq_per_contig[ most_downstream_pos:most_downstream_pos+2 ].upper()	#this should be GT
+			acceptor_splice_site = seq_per_contig[most_downstream_pos-1:most_downstream_pos+1] # CT
+			donor_splice_site = seq_per_contig[current_position-3:current_position-1] # AC
 			print( "donor splice site: " + donor_splice_site )
 			print( "acceptor splice site: " + acceptor_splice_site )
 			if donor_splice_site == "AC" and acceptor_splice_site == "CT":	#reverse sequences of GT-AG
-				most_downstream_pos = current_position - 1
+				most_downstream_pos = current_position + 1
 			elif splicesites == "off":	#ignore check for canonical splice sites
-				most_downstream_pos = current_position - 1
+				most_downstream_pos = current_position + 1
 			elif current_position - most_downstream_pos < tolerated_gap:
 				most_downstream_pos = current_position + 1
 			else:
@@ -468,6 +470,8 @@ def main( arguments ):
 				fig_file = output_folder + gene + ".png"
 				if upstream_gene:
 					hard_cutoff = gene_infos[ upstream_gene ]['end']
+					if upstream_gene == "AT1G01040":
+						print("hard cutoff based on AT1G01040 as upstream gene is "+str(hard_cutoff))
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
