@@ -78,13 +78,15 @@ def load_gene_infos( gff_file ):
 	"""! @brief load gene ID, position, and orientation from GFF3 file """
 	
 	gene_infos = {}
+	mrna_infos = {}
 	genes_per_chromosome = {}
+	transcripts_per_gene = {}
 	with open( gff_file, "r" ) as f:
 		line = f.readline()
 		while line:
 			if line[0] != "#":
 				parts = line.strip().split('\t')
-				if parts[2] == "gene":	#could be extended to other feature types
+				if parts[2].lower() == "gene":	#could be extended to other feature types
 					ID = parts[-1].split('ID=')[-1]
 					if ";" in ID:
 						ID = ID.split(';')[0]
@@ -93,10 +95,22 @@ def load_gene_infos( gff_file ):
 						genes_per_chromosome[ parts[0] ].append( ID )
 					except KeyError:
 						genes_per_chromosome.update( { parts[0]: [ ID ] } )
+				if parts[2].upper() == "MRNA":
+					ID = parts[-1].split('ID=')[-1]
+					if ";" in ID:
+						ID = ID.split(';')[0]
+					Parent = parts[-1].split('Parent=')[-1]
+					if ";" in Parent:
+						Parent = Parent.split(';')[0]
+					mrna_infos.update( { ID: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } } )
+					try:
+						transcripts_per_gene[ Parent ].append( ID )
+					except KeyError:
+						transcripts_per_gene.update( { Parent: [ ID ] } )
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
 		genes_per_chromosome[chromosome].sort(key=lambda gene: gene_infos[gene]['start'])
-	return gene_infos, genes_per_chromosome
+	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
@@ -477,12 +491,13 @@ def main( arguments ):
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos, genes_per_chromosome = load_gene_infos( gff_file )
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene = load_gene_infos( gff_file )
 	
 	genome_seq = load_sequences( fasta_file )
 	
 	#run analysis per gene of interest
 	results = {}
+	confidence_score_dic = {}
 	for gene in goi:
 		try:
 			cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
@@ -490,6 +505,7 @@ def main( arguments ):
 			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
 			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
+			avg_cov_gene = sum(cov_per_contig[start-1:end])/(end-(start-1)) #get average coverage of the gene of interest for confidence thresholding
 			# check if goi is an overlapping gene
 			overlaps = 0
 			for ugene in upstream_gene_list:
@@ -531,14 +547,19 @@ def main( arguments ):
 				results.update( { gene: result } )
 		except KeyError:
 			print( "Missing gene error: " + gene )
-		
+			#calculating confidence score
+			isoforms=len(transcripts_per_gene[gene])# no. of isoforms per gene
+			distance=abs((results[ gene ]['TSS'])-start) # distance between predicted TSS and gene start
+			TSS_confidence_score = (avg_cov_gene)/(isoforms*distance)
+			confidence_score_dic[gene]=TSS_confidence_score
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "TSS_confidence_Score", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
 												str( results[ gene ]['TSS'] ),
+									   			str(confidence_score_dic[gene]),
 												str( results[ gene ]['start'] ),
 												str( results[ gene ]['end'] ),
 												str( results[ gene ]['promoter_status'] ),
