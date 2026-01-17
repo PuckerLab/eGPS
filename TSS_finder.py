@@ -143,8 +143,6 @@ def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_en
 
 def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
 	"""! @brief run analysis on forward strand """
-	if gene == "AT1G01046":
-		print("hard cutoff for the overlapping gene TSS analysis is "+ str(hard_cutoff))
 	most_upstream_pos = start
 	final_pos_status = False
 	while not final_pos_status:
@@ -168,7 +166,6 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
 		#average coverage in intron should be very low
 		if current_position > min_exon_size and avg_gap_coverage > mincov:
-			print("avg spanning gap coverage is "+str(avg_gap_coverage))
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
 			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
@@ -251,7 +248,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		else:
 			final_pos_status = True
 	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
-	
+
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
 	plot_start_region = end - flank_region_for_plot
 	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
@@ -273,19 +270,41 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	return { 'TSS': most_downstream_pos, 'start': start, 'end': end }
 
 
-def find_flanking_genes( gene, gene_infos, genes_per_chromosome ):
+def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	"""! @brief find upstream and downstream genes """
 	
-	up_gene = False
-	down_gene = False
+	just_up_gene = False
+	just_down_gene = False
 	chromosome = gene_infos[ gene ]['chromosome']
 	gene_order = genes_per_chromosome[ chromosome ]
 	index = gene_order.index( gene )
+	counter = 1
+	up_genes=[]
 	if index > 0:
-		up_gene = gene_order[ index-1 ]
+		if index < window:
+			cutoff = index
+		else:
+			cutoff = window
+		while counter <= cutoff:
+			up_gene = gene_order[ index - counter ]
+			if counter == 1:
+				just_up_gene = up_gene
+			up_genes.append(up_gene)
+			counter+=1
+	counter=1
+	down_genes=[]
 	if index < len( gene_order )-1:
-		down_gene = gene_order[ index+1 ]
-	return up_gene, down_gene
+		if ((len(gene_order)) - (index + 1)) < window:
+			cutoff = ((len(gene_order)) - (index + 1))
+		else:
+			cutoff = window
+		while counter <= cutoff:
+			down_gene = gene_order[index + counter]
+			if counter==1:
+				just_down_gene = down_gene
+			down_genes.append(down_gene)
+			counter+=1
+	return just_up_gene, just_down_gene, up_genes, down_genes
 	
 
 def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size=50, max_promoter_size=1000 ):
@@ -428,6 +447,12 @@ def main( arguments ):
 		flank_region_for_plot = int( arguments[ arguments.index('--flanksize')+1 ] )
 	else:
 		flank_region_for_plot = 50
+
+	#gene neighbourhood window for overlapping gene analysis
+	if '--neighbourhood' in arguments:
+		window = int( arguments[arguments.index('--neighbourhood')+1])
+	else:
+		window = 5
 	
 	#tolerated coverage gap size (due to sequence variant)
 	if '--gapsize' in arguments:
@@ -464,14 +489,28 @@ def main( arguments ):
 			scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
 			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
 			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
-			upstream_gene, downstream_gene = find_flanking_genes( gene, gene_infos, genes_per_chromosome )
-			
+			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
+			# check if goi is an overlapping gene
+			overlaps = 0
+			for ugene in upstream_gene_list:
+				up_end = gene_infos[ ugene ]['end']
+				if start <= up_end:
+					overlaps += 1
+			#this code section is commented to disable downstream overlap check as upstream overlap check is sufficient condition
+			"""
+			for dgene in downstream_gene_list:
+				down_start = gene_infos[ dgene ]['start']
+				if end >= down_start:
+					overlaps += 1
+			"""
+			if overlaps > 0: # skip the TSS analysis for the overlapping goi and continue with the for loop iteration of the enxt goi
+				print(f"{gene} is overlapping. TSS analysis skipped for this gene.")
+				continue
 			if orientation == "+":	#only works on forward strand
 				fig_file = output_folder + gene + ".png"
 				if upstream_gene:
 					hard_cutoff = gene_infos[ upstream_gene ]['end']
-					if upstream_gene == "AT1G01040":
-						print("hard cutoff based on AT1G01040 as upstream gene is "+str(hard_cutoff))
+
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
