@@ -545,17 +545,20 @@ def main( arguments ):
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
 				results.update( { gene: result } )
+			# calculating confidence score
+			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
+			distance = abs((results[gene]['TSS']) - start)  # distance between predicted TSS and gene start
+			total_contribution = avg_cov_gene + distance + isoforms
+			coverage_score = (avg_cov_gene / total_contribution)  # contribution of coverage to total score
+			distance_score = 1 - (distance / total_contribution)  # contribution of distance to total score; 1 - is used since distance is inversely related to total score
+			isoform_score = 1 - (isoforms / total_contribution)  # contribution of no. of isoforms to total score; 1 - is used since no. of isoforms is inversely related to total score
+			TSS_confidence_score = (coverage_score * distance_score * isoform_score) ** (1 / 3) # confidence score is a gemotric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
+			confidence_score_dic[gene]=TSS_confidence_score
 		except KeyError:
 			print( "Missing gene error: " + gene )
-			#calculating confidence score
-			isoforms=len(transcripts_per_gene[gene])# no. of isoforms per gene
-			distance=abs((results[ gene ]['TSS'])-start) # distance between predicted TSS and gene start
-			total_contribution = avg_cov_gene + distance + isoforms
-			coverage_score = (avg_cov_gene / total_contribution)#contribution of coverage to total score
-			distance_score = 1 - (distance / total_contribution)#contribution of distance to total score; 1 - is used since distance is inversely related to total score
-			isoform_score = 1 - (isoforms / total_contribution)#contribution of no. of isoforms to total score; 1 - is used since no. of isoforms is inversely related to total score
-			TSS_confidence_score = (coverage_score*distance_score*isoform_score)**(1/3#confidence score is a gemotric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
-			confidence_score_dic[gene]=TSS_confidence_score
+			# If gene was added to results but confidence calculation failed, add fall back
+			if gene in results and gene not in confidence_score_dic:
+				confidence_score_dic[gene] = "NA"
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
