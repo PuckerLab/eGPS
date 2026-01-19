@@ -482,11 +482,16 @@ def main( arguments ):
 	else:
 		splicesites = "strict"
 	
-	
-	min_promoter_size=50
-	max_promoter_size=1000
-	
-	
+	if '--min_promoter_size' in arguments:
+		min_promoter_size = arguments[arguments.index('--min_promoter_size')+1]
+	else:
+		min_promoter_size = 50
+
+	if '--max_promoter_size' in arguments:
+		max_promoter_size = arguments[arguments.index('--max_promoter_size')+1]
+	else:
+		max_promoter_size = 1000
+
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
