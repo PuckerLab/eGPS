@@ -1,6 +1,7 @@
 ### Boas Pucker ###
+### Shakunthala Natarajan ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.0231"
+__version__ = "v0.03"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
@@ -28,7 +29,9 @@ __usage__ = """
 					"""
 
 
-import os, sys, subprocess, gzip
+import re, os, sys, subprocess, gzip
+import numpy as np
+from collections import defaultdict
 try:
 	import matplotlib.pyplot as plt
 except ImportError:
@@ -58,19 +61,27 @@ def construct_scov_file( bam_file, scov_file, bedtools ):
 
 def load_coverage( cov_file, input_mode ):
 	"""! @brief load coverage per genomic position """
-	
-	#add support for gzip-compressed files
-	
 	coverage_per_seq = {}
-	with open( cov_file, "r" ) as f:
-		line = f.readline()
-		while line:
-			parts = line.strip().split('\t')
-			try:
-				coverage_per_seq[ parts[0] ].append( float( parts[2] ) )
-			except KeyError:
-				coverage_per_seq.update( { parts[0]: [ float( parts[2] ) ] } )
+	if not cov_file.endswith("gz"):#uncompressed file
+		with open( cov_file, "r" ) as f:
 			line = f.readline()
+			while line:
+				parts = line.strip().split('\t')
+				try:
+					coverage_per_seq[ parts[0] ].append( float( parts[2] ) )
+				except KeyError:
+					coverage_per_seq.update( { parts[0]: [ float( parts[2] ) ] } )
+				line = f.readline()
+	else:#compressed file
+		with gzip.open( cov_file, "rt" ) as f:
+			line = f.readline()
+			while line:
+				parts = line.strip().split('\t')
+				try:
+					coverage_per_seq[ parts[0] ].append( float( parts[2] ) )
+				except KeyError:
+					coverage_per_seq.update( { parts[0]: [ float( parts[2] ) ] } )
+				line = f.readline()
 	return coverage_per_seq
 
 
@@ -491,6 +502,144 @@ def main( arguments ):
 		max_promoter_size = arguments[arguments.index('--max_promoter_size')+1]
 	else:
 		max_promoter_size = 1000
+
+	if '--STAR'in arguments:#full path to STAR for RNAseq mapping
+		star = arguments[arguments.index('--STAR')+1]
+	else:#recommended to use STARlong as it is applicable to both short and long reads.
+		star = 'STARlong'
+
+	if '--index_bases' in arguments:#parameter for the genomeSAindexNbases flag in STAR
+		index_bases = arguments[arguments.index('--index_bases')+1]
+	else:
+		index_bases = 12
+
+	if '--run_mode' in arguments: #to provide mode options for the user; make_bam starts from STAR indexing; find_tss starts from bam or coverage file.
+		run_mode = arguments[arguments.index('--run_mode')+1]
+	else:
+		run_mode = 'find_tss'
+
+	if '--sra_folder' in arguments:
+		sra_folder = arguments[arguments.index('--sra_folder')+1]
+	else:
+		sra_folder = ''
+
+	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
+	if run_mode == 'make_bam':
+		#Calculating the optimal intron size for the species to be analysed
+		trans_exon_map = {}
+		intron_sizes = []
+
+		# parsing the gff file and making a dictionary where keys are transcript names and values are lists of tuples where each tuple is the start, end coordinate of exons in that transcript
+		with open(gff_file,'r') as f:
+			for line in f:
+				if not line.startswith('#'):
+					parts = line.strip().split('\t')
+					if parts[2].lower() == 'exon':
+						fields = parts[8].strip().split(';')
+						for each in fields:
+							if 'Parent=' in each:
+								transcript = each.replace('Parent=', '')
+								start = int(parts[3])
+								end = int(parts[4])
+								if transcript not in trans_exon_map:
+									trans_exon_map[transcript] = [(start, end)]
+								else:
+									trans_exon_map[transcript].append((start, end))
+
+		# calculate intron sizes
+		for transcript in trans_exon_map.keys():
+			exons = trans_exon_map[transcript]
+			if len(exons) < 2:
+				continue
+			counter = 0
+			# sort by ascending order of start coordinates
+			exons.sort(key=lambda x: x[0])
+			while counter <= (len(exons) - 2):
+				intron = exons[counter + 1][0] - exons[counter][1] - 1
+				if intron <= 0:
+					pass
+				else:
+					intron_sizes.append(intron)
+				counter += 1
+
+		# Calculate statistics
+		median_size = np.median(intron_sizes)
+		mean_size = np.mean(intron_sizes)
+		intron_cutoff = np.percentile(intron_sizes, 99)
+		intron_min = np.min(intron_sizes)
+		intron_max = np.max(intron_sizes)
+		print(f"Total number of introns: {len(intron_sizes)}")
+		print(f"Minimum intron size is {intron_min} and maximum intron size is {intron_max}")
+		print(f"Median intron size is {median_size} and mean intron size is {mean_size}")
+		print(f"Intron size for the --alignIntronMax flag is {intron_cutoff}")
+		# plotting the intron size distribution
+		intron_plot=os.path.join(output_folder,'Intron_size_distribution.png')
+		plt.figure(figsize=(8, 5))
+		plt.hist(intron_sizes, bins=100, color='steelblue', edgecolor='black')
+		plt.xlabel('Intron length (bp)')
+		plt.ylabel('Frequency')
+		plt.title('Distribution of intron sizes')
+		plt.grid(True, linestyle='--', alpha=0.6)
+		plt.tight_layout()
+		plt.savefig(intron_plot,dpi=600)
+		star_indexing_folder=os.path.join(output_folder,'STAR_index')
+		os.mkdir(star_indexing_folder)
+		# Indexing with STAR
+		cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+index_bases
+		p = subprocess.Popen(args=cmd, shell=True)
+		p.communicate()
+		star_mapping_folder = os.path.join(output_folder,'STAR_map')
+		os.mkdir(star_mapping_folder)
+		if sra_folder:
+			pairs=defaultdict(dict)#create a default dictionary for holding the paired end files
+			for f in os.listdir(sra_folder):
+				# Only consider FASTQ files
+				if not f.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
+					continue
+				if "_pass_1_" in f:
+					sample = f.split("_pass_1_")[0]
+					pairs[sample]["R1"] = f
+
+				elif "_pass_2_" in f:
+					sample = f.split("_pass_2_")[0]
+					pairs[sample]["R2"] = f
+			for sample, reads in pairs.items():
+				if "R1" in reads and "R2" in reads:
+					r1 = os.path.join(sra_folder, reads["R1"])
+					r2 = os.path.join(sra_folder, reads["R2"])
+					#RNAseq mapping with STAR
+					prefix=os.path.join(star_mapping_folder,sample+'_')
+					cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+intron_cutoff
+					p = subprocess.Popen(args=cmd, shell=True)
+					p.communicate()
+			#merging all the sorted BAM files obtained from STARlong mapping
+			bam_files=os.path.join(output_folder,'bam_files.txt')
+			if len(os.listdir(star_mapping_folder)) > 1:
+				with open(bam_files,'w')as out:
+					for f in os.listdir(star_mapping_folder):
+						if f.endswith('bam'):
+							out.write(f+'\n')
+				merged_bam=os.path.join(output_folder,sample+'_merged.bam')
+				cmd = samtools+' merge -o '+merged_bam+' -b '+bam_files
+				p = subprocess.Popen(args=cmd, shell=True)
+				p.communicate()
+				#sorting the merged bam file
+				print("sorting merged BAM file ...")
+				sorted_merged_bam_file = os.path.join(output_folder,sample+"_merged_sorted.bam")
+				cmd = samtools + " sort -m " + m + " --threads " + t + " " + merged_bam + " > " + sorted_merged_bam_file
+				p = subprocess.Popen(args=cmd, shell=True)
+				p.communicate()
+			elif len(os.listdir(star_mapping_folder)) == 1:
+				for f in (os.listdir(star_mapping_folder)):
+					sorted_merged_bam_file = f
+			cov_file = output_folder + "reads_aligned.cov"
+			scov_file = output_folder + "reads_spanning.cov"
+
+			if not os.path.isfile(cov_file):
+				construct_cov_file(sorted_merged_bam_file, cov_file, bedtools)
+			if not os.path.isfile(scov_file):
+				construct_scov_file(sorted_merged_bam_file, scov_file, bedtools)
+			input_mode = "cov"
 
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
