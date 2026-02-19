@@ -424,6 +424,11 @@ def main( arguments ):
 			t = arguments[ arguments.index( '--threads' )+1 ]
 		else:
 			t = "4"
+
+		if '--intron_percentile_cutoff' in arguments:
+			percentile_cut = int(arguments[arguments.index('--intron_percentile_cutoff')+1 ])
+		else:
+			percentile_cut = 99
 		
 		if not bam_sorted_status:	#sorting the BAM file if it was not sorted already
 			print ("sorting BAM file ...")
@@ -565,7 +570,7 @@ def main( arguments ):
 		# Calculate statistics
 		median_size = np.median(intron_sizes)
 		mean_size = np.mean(intron_sizes)
-		intron_cutoff = np.percentile(intron_sizes, 99)
+		intron_cutoff = np.percentile(intron_sizes, percentile_cut)
 		intron_min = np.min(intron_sizes)
 		intron_max = np.max(intron_sizes)
 		print(f"Total number of introns: {len(intron_sizes)}")
