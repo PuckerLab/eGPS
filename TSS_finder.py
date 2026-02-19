@@ -120,7 +120,7 @@ def load_gene_infos( gff_file ):
 						transcripts_per_gene.update( { Parent: [ ID ] } )
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
-		genes_per_chromosome[chromosome].sort(key=lambda gene: gene_infos[gene]['start'])
+		genes_per_chromosome[chromosome].sort(key=lambda gene: (gene_infos[gene]['start'], gene))
 	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene
 
 def load_sequences( fasta_file ):
