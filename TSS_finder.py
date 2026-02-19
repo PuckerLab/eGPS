@@ -332,15 +332,16 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	return just_up_gene, just_down_gene, up_genes, down_genes
 	
 
-def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size=50, max_promoter_size=1000 ):
+def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size ):
 	"""! @brief extract promoter region """
 	
 	tss = result['TSS']
 	gene_start = result['start']
 	gene_end = result['end']
+
 	if orientation == "+":	#forward strand	
-		if hard_cutoff - tss > min_promoter_size:
-			if hard_cutoff - tss > max_promoter_size:
+		if abs(hard_cutoff - tss) > min_promoter_size:
+			if abs(hard_cutoff - tss) > max_promoter_size:
 				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
 				promoter_status = True
 			else:
@@ -351,8 +352,8 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
 	else:	#reverse strand
-		if tss - hard_cutoff > min_promoter_size:
-			if tss - hard_cutoff > max_promoter_size:
+		if abs(tss - hard_cutoff) > min_promoter_size:
+			if abs(tss - hard_cutoff > max_promoter_size):
 				promoter = seq_per_contig[ tss:tss+max_promoter_size ]
 				promoter_status = True
 			else:
