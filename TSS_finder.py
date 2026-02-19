@@ -623,12 +623,7 @@ def main( arguments ):
 				cmd = samtools+' merge -o '+merged_bam+' -b '+bam_files
 				p = subprocess.Popen(args=cmd, shell=True)
 				p.communicate()
-				#sorting the merged bam file
-				print("sorting merged BAM file ...")
-				sorted_merged_bam_file = os.path.join(output_folder,sample+"_merged_sorted.bam")
-				cmd = samtools + " sort -m " + m + " --threads " + t + " " + merged_bam + " > " + sorted_merged_bam_file
-				p = subprocess.Popen(args=cmd, shell=True)
-				p.communicate()
+
 			elif len(os.listdir(star_mapping_folder)) == 1:
 				for f in (os.listdir(star_mapping_folder)):
 					sorted_merged_bam_file = f
@@ -636,9 +631,9 @@ def main( arguments ):
 			scov_file = output_folder + "reads_spanning.cov"
 
 			if not os.path.isfile(cov_file):
-				construct_cov_file(sorted_merged_bam_file, cov_file, bedtools)
+				construct_cov_file(merged_bam, cov_file, bedtools)
 			if not os.path.isfile(scov_file):
-				construct_scov_file(sorted_merged_bam_file, scov_file, bedtools)
+				construct_scov_file(merged_bam, scov_file, bedtools)
 			input_mode = "cov"
 
 	# --- load data --- #
