@@ -147,15 +147,16 @@ def load_sequences( fasta_file ):
 	return sequences
 
 
-def generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation ):
+def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation ):
 	"""! @brief generate a coverage plot """
 	
 	fig, ax1 = plt.subplots()
 	ax1.plot( values, color="black", linestyle="solid" )	#coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot( svalues, color="red", linestyle="dotted" )	#coverage of spanning reads
-	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted" )	#ATG position
-	
+	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted", label="ATG")	#ATG position
+	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
+	ax2.legend()
 	ax1.set_title( gene + "   (" + orientation + ")" )
 	ax1.set_xlabel( "position in genomic region from " + str( genomic_start ) + " to " + str( genomic_end ) )
 	ax1.set_ylabel( "aligned RNA-seq coverage" )
@@ -220,11 +221,12 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
 	atg_pos = len( svalues )-flank_region_for_plot
+	tss_pos = most_upstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
 	
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation )
+		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
@@ -284,11 +286,12 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
 	atg_pos = flank_region_for_plot + 0
+	tss_pos = most_downstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
 	
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, genomic_start, genomic_end, gene, orientation )
+		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
