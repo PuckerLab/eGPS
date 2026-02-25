@@ -343,8 +343,8 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 	gene_end = result['end']
 
 	if orientation == "+":	#forward strand	
-		if abs(hard_cutoff - tss) > min_promoter_size:
-			if abs(hard_cutoff - tss) > max_promoter_size:
+		if (tss - hard_cutoff) > min_promoter_size:
+			if (tss - hard_cutoff) > max_promoter_size:
 				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
 				promoter_status = True
 			else:
@@ -355,8 +355,8 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
 	else:	#reverse strand
-		if abs(tss - hard_cutoff) > min_promoter_size:
-			if abs(tss - hard_cutoff > max_promoter_size):
+		if (hard_cutoff - tss) > min_promoter_size:
+			if (hard_cutoff - tss) > max_promoter_size:
 				promoter = seq_per_contig[ tss:tss+max_promoter_size ]
 				promoter_status = True
 			else:
