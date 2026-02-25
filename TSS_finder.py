@@ -655,7 +655,10 @@ def main( arguments ):
 	
 	#run analysis per gene of interest
 	results = {}
-	confidence_score_dic = {}
+	#confidence_score_dic = {}
+	isoforms_dic = {}
+	distance_dic = {}
+	coverage_dic = {}
 	for gene in goi:
 		try:
 			cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
@@ -706,25 +709,32 @@ def main( arguments ):
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
 			distance = abs((results[gene]['TSS']) - start)  # distance between predicted TSS and gene start
+			"""
 			total_contribution = avg_cov_gene + distance + isoforms
 			coverage_score = (avg_cov_gene / total_contribution)  # contribution of coverage to total score
 			distance_score = 1 - (distance / total_contribution)  # contribution of distance to total score; 1 - is used since distance is inversely related to total score
 			isoform_score = 1 - (isoforms / total_contribution)  # contribution of no. of isoforms to total score; 1 - is used since no. of isoforms is inversely related to total score
 			TSS_confidence_score = (coverage_score * distance_score * isoform_score) ** (1 / 3) # confidence score is a gemotric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
-			confidence_score_dic[gene]=TSS_confidence_score
+			"""
+			isoforms_dic[gene]=isoforms
+			distance_dic[gene]=distance
+			coverage_dic[gene]=avg_cov_gene
 		except KeyError:
 			print( "Missing gene error: " + gene )
+			"""
 			# If gene was added to results but confidence calculation failed, add fall back
 			if gene in results and gene not in confidence_score_dic:
 				confidence_score_dic[gene] = "NA"
+			"""
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "TSS_confidence_Score", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "NUmber of isoforms", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
 												str( results[ gene ]['TSS'] ),
-									   			str(confidence_score_dic[gene]),
+									   			str(coverage_dic[gene]),
+									   			str(isoforms_dic[gene]),
 												str( results[ gene ]['start'] ),
 												str( results[ gene ]['end'] ),
 												str( results[ gene ]['promoter_status'] ),
