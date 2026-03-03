@@ -90,6 +90,7 @@ def load_gene_infos( gff_file ):
 	
 	gene_infos = {}
 	mrna_infos = {}
+	five_utr_infos={}
 	genes_per_chromosome = {}
 	transcripts_per_gene = {}
 	with open( gff_file, "r" ) as f:
@@ -118,10 +119,17 @@ def load_gene_infos( gff_file ):
 						transcripts_per_gene[ Parent ].append( ID )
 					except KeyError:
 						transcripts_per_gene.update( { Parent: [ ID ] } )
+				if parts[2].upper() == 'FIVE_PRIME_UTR':
+					Parent = parts[-1].split('Parent=')[-1]#Parent of 5'UTR is transcript
+					if ";" in Parent:
+						Parent = Parent.split(';')[0]
+						five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
 		genes_per_chromosome[chromosome].sort(key=lambda gene: (gene_infos[gene]['start'], gene))
-	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene
+	for gene in transcripts_per_gene:#sort the transcripts per gene in the ascending order of mRNA start positions
+		transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['start'], transcript))
+	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
@@ -165,6 +173,45 @@ def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, g
 	ax2.yaxis.label.set_color('red')
 	
 	fig.savefig( fig_file, dpi=300 )
+
+def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_end):
+	#define head/tail coordinates based on strand
+	if goi_strand == '+':
+		goi_head, goi_tail = goi_start, goi_end
+	else:# '- strand'
+		goi_head, goi_tail = goi_end,   goi_start
+
+	if nbr_strand == '+':
+		nbr_head, nbr_tail = nbr_start, nbr_end
+	else:
+		nbr_head, nbr_tail = nbr_end,   nbr_start
+
+	#find the actual overlap window
+	ov_start = max(goi_start, nbr_start)
+	ov_end   = min(goi_end,   nbr_end)
+
+	if ov_start > ov_end:
+		return 'no_overlap'
+
+	if goi_strand == nbr_strand:
+		return 'same_strand'# tandem or nested, promoter may be affected
+
+	#check which functional ends fall inside the overlap window
+	goi_head_in_ov = ov_start <= goi_head <= ov_end
+	goi_tail_in_ov = ov_start <= goi_tail <= ov_end
+	nbr_head_in_ov = ov_start <= nbr_head <= ov_end
+	nbr_tail_in_ov = ov_start <= nbr_tail <= ov_end
+
+	if goi_head_in_ov and nbr_head_in_ov:
+		return 'head_head'
+	if goi_tail_in_ov and nbr_tail_in_ov:
+		return 'tail_tail'
+	if goi_head_in_ov:
+		return 'head_into_neighbor'
+	if goi_tail_in_ov:
+		return 'tail_into_neighbor'
+	return 'nested'
+
 
 
 def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
@@ -672,7 +719,7 @@ def main( arguments ):
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene = load_gene_infos( gff_file )
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos = load_gene_infos( gff_file )
 	
 	genome_seq = load_sequences( fasta_file )
 	
@@ -682,30 +729,60 @@ def main( arguments ):
 	isoforms_dic = {}
 	distance_dic = {}
 	coverage_dic = {}
+	five_utr_dic = {}
 	for gene in goi:
 		try:
 			cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
 			scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
 			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
-			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest
+			#code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
+			if gene in transcripts_per_gene:
+				transcript_list = transcripts_per_gene[ gene ]
+				for each in transcript_list:
+					if each in five_utr_infos and gene_infos[ gene ]['orientation']=='+' and each==transcript_list[0]:
+						start=five_utr_infos[each]['start'] #in case a gene has transcripts with 5'UTR annotated, the most upstream 5'UTR will be taken as the start for the + strand gene
+						end, orientation = gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest
+						five_utr_dic[gene]=f"5'UTR start of {each} used for TSS prediction."
+						break
+					elif each in five_utr_infos and gene_infos[ gene ]['orientation']=='-' and each==transcript_list[-1]:
+						end = five_utr_infos[each]['end']  # in case a gene has transcripts with 5'UTR annotated, the most downstream 5'UTR will be taken as the start for the - strand gene
+						start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
+						five_utr_dic[gene] = f"5'UTR end of {each} used for TSS prediction."
+						break
+			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest if it does not have 5'UTRs annotated
+			if gene not in five_utr_dic and orientation == '+':
+				five_utr_dic[gene] = f"No 5'UTR annotated. {gene} start used for TSS prediction."
+			if gene not in five_utr_dic and orientation == '-':
+				five_utr_dic[gene] = f"No 5'UTR annotated. {gene} end used for TSS prediction."
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
 			avg_cov_gene = sum(cov_per_contig[start-1:end])/(end-(start-1)) #get average coverage of the gene of interest for confidence thresholding
-			# check if goi is an overlapping gene
-			overlaps = 0
+			#check if goi is an overlapping gene
+			#TSS-blocking overlap types
+			SKIP_TSS_TYPES = {'head_head', 'head_into_neighbor', 'same_strand', 'nested'}#'tail_tail' and 'tail_into_neighbor' overlap types are safe for TSS analysis
+			goi_strand = gene_infos[gene]['strand']
+			blocking_overlaps = 0
 			for ugene in upstream_gene_list:
-				up_end = gene_infos[ ugene ]['end']
-				if start <= up_end:
-					overlaps += 1
-			#this code section is commented to disable downstream overlap check as upstream overlap check is sufficient condition
-			"""
+				nbr = gene_infos[ugene]
+
+				if start <= nbr['end']:  # positional overlap exists
+					ov_type = get_overlap_type(goi_strand, start, end,nbr['strand'], nbr['start'], nbr['end'])
+					print(f"  {gene} ↔ {ugene}: {ov_type}")
+					if ov_type in SKIP_TSS_TYPES:
+						blocking_overlaps += 1
+				#'tail_tail' → do NOT increment; TSS analysis can still run
+			#downstream check is re-enabled now because strand matters:
+			#a downstream neighbor can cause a head_head overlap for − strand GOIs
 			for dgene in downstream_gene_list:
-				down_start = gene_infos[ dgene ]['start']
-				if end >= down_start:
-					overlaps += 1
-			"""
-			if overlaps > 0: # skip the TSS analysis for the overlapping goi and continue with the for loop iteration of the enxt goi
-				print(f"{gene} is overlapping. TSS analysis skipped for this gene.")
+				nbr = gene_infos[dgene]
+				if end >= nbr['start']:  # positional overlap exists
+					ov_type = get_overlap_type(goi_strand, start, end,nbr['strand'], nbr['start'], nbr['end'])
+					print(f"  {gene} ↔ {dgene}: {ov_type}")
+					if ov_type in SKIP_TSS_TYPES:
+						blocking_overlaps += 1
+			if blocking_overlaps > 0:
+				print(f"{gene} has {blocking_overlaps} overlap(s). TSS analysis skipped.")
 				continue
+
 			if orientation == "+":	#only works on forward strand
 				fig_file = output_folder + gene + ".png"
 				if upstream_gene:
@@ -737,7 +814,7 @@ def main( arguments ):
 			coverage_score = (avg_cov_gene / total_contribution)  # contribution of coverage to total score
 			distance_score = 1 - (distance / total_contribution)  # contribution of distance to total score; 1 - is used since distance is inversely related to total score
 			isoform_score = 1 - (isoforms / total_contribution)  # contribution of no. of isoforms to total score; 1 - is used since no. of isoforms is inversely related to total score
-			TSS_confidence_score = (coverage_score * distance_score * isoform_score) ** (1 / 3) # confidence score is a gemotric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
+			TSS_confidence_score = (coverage_score * distance_score * isoform_score) ** (1 / 3) # confidence score is a geometric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
 			"""
 			isoforms_dic[gene]=isoforms
 			distance_dic[gene]=distance
@@ -752,16 +829,17 @@ def main( arguments ):
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "NUmber of isoforms", "Start", "End", "PromoterStatus", "Promoter" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
 												str( results[ gene ]['TSS'] ),
-									   			str(coverage_dic[gene]),
-									   			str(isoforms_dic[gene]),
+												str(coverage_dic[gene]),
+												str(isoforms_dic[gene]),
 												str( results[ gene ]['start'] ),
 												str( results[ gene ]['end'] ),
 												str( results[ gene ]['promoter_status'] ),
-												str( results[ gene ]['promoter'] )
+												str( results[ gene ]['promoter'] ),
+												str(five_utr_dic[gene])
 										] ) + "\n" )
 
 
