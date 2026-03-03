@@ -242,8 +242,12 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
 			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
-			print( "donor splice site: " + donor_splice_site )
-			print( "acceptor splice site: " + acceptor_splice_site )
+			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
+				print( "donor splice site: " + donor_splice_site )
+				print( "acceptor splice site: " + acceptor_splice_site )
+			elif donor_splice_site == "GC" and acceptor_splice_site == "AG":
+				print( "Non-canonical donor splice site: " + donor_splice_site )
+				print( "Non-canonical acceptor splice site: " + acceptor_splice_site )
 			print("current position is " + str( current_position ) )
 			print ("most upstream position is " + str( most_upstream_pos ) )
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
