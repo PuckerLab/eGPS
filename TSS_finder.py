@@ -512,6 +512,16 @@ def main( arguments ):
 	else:
 		max_promoter_size = 1000
 
+	if '--aligner' in arguments:# <STAR/HISAT2> option for user to use star or HISAT2 aligners
+		aligner = arguments[arguments.index('--aligner')+1]
+	else:
+		aligner = 'STAR'
+
+	if '--HISAT2' in arguments:#full path to HISAT2 for RNAseq mapping
+		hisat2 = arguments[arguments.index('--HISAT2')+1]
+	else:
+		hisat2 = 'hisat2'
+
 	if '--STAR'in arguments:#full path to STAR for RNAseq mapping
 		star = arguments[arguments.index('--STAR')+1]
 	else:#recommended to use STARlong as it is applicable to both short and long reads.
@@ -591,13 +601,20 @@ def main( arguments ):
 		plt.grid(True, linestyle='--', alpha=0.6)
 		plt.tight_layout()
 		plt.savefig(intron_plot,dpi=600)
-		star_indexing_folder=os.path.join(output_folder,'STAR_index')
+		star_indexing_folder=os.path.join(output_folder,'Genome_index')
 		os.mkdir(star_indexing_folder)
-		# Indexing with STAR
-		cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+index_bases
-		p = subprocess.Popen(args=cmd, shell=True)
-		p.communicate()
-		star_mapping_folder = os.path.join(output_folder,'STAR_map')
+		if aligner == 'STAR':
+			# Indexing with STAR
+			cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+index_bases
+			p = subprocess.Popen(args=cmd, shell=True)
+			p.communicate()
+		elif aligner == 'HISAT2':
+			#Indexing with HISAT2
+			index_file_name = os.path.join(star_indexing_folder,'Index')
+			cmd = hisat2 + '-build -p ' + t + ' ' + fasta_file + ' ' + index_file_name
+			p = subprocess.Popen(args=cmd, shell=True)
+			p.communicate()
+		star_mapping_folder = os.path.join(output_folder, 'RNA-seq_map')
 		os.mkdir(star_mapping_folder)
 		if sra_folder:
 			pairs=defaultdict(dict)#create a default dictionary for holding the paired end files
@@ -616,11 +633,17 @@ def main( arguments ):
 				if "R1" in reads and "R2" in reads:
 					r1 = os.path.join(sra_folder, reads["R1"])
 					r2 = os.path.join(sra_folder, reads["R2"])
-					#RNAseq mapping with STAR
-					prefix=os.path.join(star_mapping_folder,sample+'_')
-					cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+intron_cutoff
-					p = subprocess.Popen(args=cmd, shell=True)
-					p.communicate()
+					if aligner == 'STAR':
+						#RNAseq mapping with STAR
+						prefix=os.path.join(star_mapping_folder,sample+'_')
+						cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+intron_cutoff
+						p = subprocess.Popen(args=cmd, shell=True)
+						p.communicate()
+					elif aligner == 'HISAT2':
+						sorted_bam = os.path.join(star_mapping_folder, sample + '_sorted.bam')
+						cmd = hisat2 + ' --max-intronlen ' + intron_cutoff + ' -p ' + t + ' -x -1 '+ r1 + ' -2 ' + r2 + ' | ' + samtools + ' sort --threads ' + t + ' -O BAM -o ' + sorted_bam
+						p = subprocess.Popen(args=cmd, shell=True)
+						p.communicate()
 			#merging all the sorted BAM files obtained from STARlong mapping
 			bam_files=os.path.join(output_folder,'bam_files.txt')
 			if len(os.listdir(star_mapping_folder)) > 1:
