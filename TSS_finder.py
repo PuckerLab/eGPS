@@ -405,6 +405,10 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
+		if 'TATAAAA' in promoter.upper() or 'TATAAAT' in promoter.upper() or 'TATATAA' in promoter.upper() or 'TATATAT' in promoter.upper():
+			tata_status = "TATA box found!"
+		else:
+			tata_status = 'No TATA box detected ...'
 	else:	#reverse strand
 		if (hard_cutoff - tss) > min_promoter_size:
 			if (hard_cutoff - tss) > max_promoter_size:
@@ -417,6 +421,10 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ gene_end:hard_cutoff ]
 			promoter_status = False
+		if 'TTTTATA' in promoter.upper() or 'ATTTATA' in promoter.upper() or 'TTATATA' in promoter.upper() or 'ATATATA' in promoter.upper():#searching for reverse complements of TATA consensus sequences in the reverse strand genes
+			tata_status = "TATA box found!"
+		else:
+			tata_status = 'No TATA box detected ...'
 	return promoter_status, promoter
 
 
