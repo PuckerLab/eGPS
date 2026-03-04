@@ -99,7 +99,7 @@ def load_gene_infos( gff_file ):
 		while line:
 			if line[0] != "#":
 				parts = line.strip().split('\t')
-				if parts[2].lower() == "gene":	#could be extended to other feature types
+				if parts[2].upper() == "GENE" or parts[2].upper() == "TRANSPOSABLE_ELEMENT_GENE" or parts[2].upper() == "PSEUDOGENE" or parts[2].upper() == "PSEUDO_GENE":	#could be extended to other feature types
 					ID = parts[-1].split('ID=')[-1]
 					if ";" in ID:
 						ID = ID.split(';')[0]
@@ -317,9 +317,12 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 			acceptor_splice_site = seq_per_contig[most_downstream_pos-1:most_downstream_pos+1] # CT
 			donor_splice_site = seq_per_contig[current_position-3:current_position-1] # AC
-			print( "donor splice site: " + donor_splice_site )
-			print( "acceptor splice site: " + acceptor_splice_site )
 			if donor_splice_site == "AC" and acceptor_splice_site == "CT":	#reverse sequences of GT-AG
+				print("donor splice site: " + donor_splice_site)
+				print("acceptor splice site: " + acceptor_splice_site)
+			elif donor_splice_site == "GC" and acceptor_splice_site == "CT":
+				print("Non-canonical donor splice site: " + donor_splice_site)
+				print("Non-canonical acceptor splice site: " + acceptor_splice_site)
 				most_downstream_pos = current_position + 1
 			elif splicesites == "off":	#ignore check for canonical splice sites
 				most_downstream_pos = current_position + 1
@@ -801,7 +804,7 @@ def main( arguments ):
 
 				if start <= nbr['end']:  # positional overlap exists
 					ov_type = get_overlap_type(goi_strand, start, end,nbr['orientation'], nbr['start'], nbr['end'])
-					print(f"  {gene} ↔ {ugene}: {ov_type}")
+					print(f"  {gene} - {ugene}: {ov_type} overlap")
 					if ov_type in SKIP_TSS_TYPES:
 						blocking_overlaps += 1
 				#'tail_tail' → do NOT increment; TSS analysis can still run
@@ -811,7 +814,7 @@ def main( arguments ):
 				nbr = gene_infos[dgene]
 				if end >= nbr['start']:  # positional overlap exists
 					ov_type = get_overlap_type(goi_strand, start, end,nbr['orientation'], nbr['start'], nbr['end'])
-					print(f"  {gene} ↔ {dgene}: {ov_type}")
+					print(f"  {gene} - {dgene}: {ov_type} overlap")
 					if ov_type in SKIP_TSS_TYPES:
 						blocking_overlaps += 1
 			if blocking_overlaps > 0:
