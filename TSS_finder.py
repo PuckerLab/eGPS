@@ -128,8 +128,11 @@ def load_gene_infos( gff_file ):
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
 		genes_per_chromosome[chromosome].sort(key=lambda gene: (gene_infos[gene]['start'], gene))
-	for gene in transcripts_per_gene:#sort the transcripts per gene in the ascending order of mRNA start positions
-		transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['start'], transcript))
+	for gene in transcripts_per_gene:#sort the transcripts per gene in the ascending order of mRNA start positions for + strand and mRNA end positions for - strand
+		if gene_infos[gene]['orientation']=='+':
+			transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['start'], transcript))
+		elif gene_infos[gene]['orientation']=='-':
+			transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['end'], transcript))
 	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos
 
 def load_sequences( fasta_file ):
@@ -791,13 +794,13 @@ def main( arguments ):
 			#check if goi is an overlapping gene
 			#TSS-blocking overlap types
 			SKIP_TSS_TYPES = {'head_head', 'head_into_neighbor', 'same_strand', 'nested'}#'tail_tail' and 'tail_into_neighbor' overlap types are safe for TSS analysis
-			goi_strand = gene_infos[gene]['strand']
+			goi_strand = gene_infos[gene]['orientation']
 			blocking_overlaps = 0
 			for ugene in upstream_gene_list:
 				nbr = gene_infos[ugene]
 
 				if start <= nbr['end']:  # positional overlap exists
-					ov_type = get_overlap_type(goi_strand, start, end,nbr['strand'], nbr['start'], nbr['end'])
+					ov_type = get_overlap_type(goi_strand, start, end,nbr['orientation'], nbr['start'], nbr['end'])
 					print(f"  {gene} ↔ {ugene}: {ov_type}")
 					if ov_type in SKIP_TSS_TYPES:
 						blocking_overlaps += 1
@@ -807,7 +810,7 @@ def main( arguments ):
 			for dgene in downstream_gene_list:
 				nbr = gene_infos[dgene]
 				if end >= nbr['start']:  # positional overlap exists
-					ov_type = get_overlap_type(goi_strand, start, end,nbr['strand'], nbr['start'], nbr['end'])
+					ov_type = get_overlap_type(goi_strand, start, end,nbr['orientation'], nbr['start'], nbr['end'])
 					print(f"  {gene} ↔ {dgene}: {ov_type}")
 					if ov_type in SKIP_TSS_TYPES:
 						blocking_overlaps += 1
