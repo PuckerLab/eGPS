@@ -431,7 +431,7 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			tata_status = "TATA box found!"
 		else:
 			tata_status = 'No TATA box detected ...'
-	return promoter_status, promoter
+	return promoter_status, promoter, tata_status
 
 
 def main( arguments ):
@@ -829,9 +829,10 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
-				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
+				result.update({'TATA_box': tata_status})
 				results.update( { gene: result } )
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
@@ -840,9 +841,10 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
-				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
+				result.update({'TATA_box': tata_status})
 				results.update( { gene: result } )
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
@@ -867,7 +869,7 @@ def main( arguments ):
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "results.txt"
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "TATA box analysis", "Additional comments" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
 												str( results[ gene ]['TSS'] ),
@@ -877,6 +879,7 @@ def main( arguments ):
 												str( results[ gene ]['end'] ),
 												str( results[ gene ]['promoter_status'] ),
 												str( results[ gene ]['promoter'] ),
+												str(results[gene]['TATA_box']),
 												str(five_utr_dic[gene])
 										] ) + "\n" )
 
