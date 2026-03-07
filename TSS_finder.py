@@ -774,6 +774,8 @@ def main( arguments ):
 			scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
 			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
 			#code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
+			# Initialize with gene coordinates as default with 5'UTR checks downstream
+			start, end, orientation = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest if it does not have 5'UTRs annotated
 			if gene in transcripts_per_gene:
 				transcript_list = transcripts_per_gene[ gene ]
 				for each in transcript_list:
@@ -787,7 +789,6 @@ def main( arguments ):
 						start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
 						five_utr_dic[gene] = f"5'UTR end of {each} used for TSS prediction."
 						break
-			start, end, orientation = gene_infos[ gene ]['start'], gene_infos[ gene ]['end'], gene_infos[ gene ]['orientation']	#get information about gene of interest if it does not have 5'UTRs annotated
 			if gene not in five_utr_dic and orientation == '+':
 				five_utr_dic[gene] = f"No 5'UTR annotated. {gene} start used for TSS prediction."
 			if gene not in five_utr_dic and orientation == '-':
