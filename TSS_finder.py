@@ -124,7 +124,7 @@ def load_gene_infos( gff_file ):
 					Parent = parts[-1].split('Parent=')[-1]#Parent of 5'UTR is transcript
 					if ";" in Parent:
 						Parent = Parent.split(';')[0]
-						five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
+					five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
 		genes_per_chromosome[chromosome].sort(key=lambda gene: (gene_infos[gene]['start'], gene))
