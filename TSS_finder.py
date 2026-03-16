@@ -195,24 +195,83 @@ def load_sequences( fasta_file ):
 	return sequences
 
 
-def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation ):
+def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot ):
 	"""! @brief generate a coverage plot """
-	
-	fig, ax1 = plt.subplots()
+	#adaptive figure sizing based on coverage intervals and genomic range
+	genomic_range = genomic_end - genomic_start
+	fig_width = max(10, genomic_range / 100)  # 1 inch per 100 bp, minimum 10 inches
+
+	y_max = max(max(svalues + values), 1)
+	fig_height = max(5, y_max / 500)  # 1 inch per 500 coverage units, minimum 5 inches
+	"""
+	fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
 	ax1.plot( values, color="black", linestyle="solid" )	#coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot( svalues, color="red", linestyle="dotted" )	#coverage of spanning reads
 	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted", label="ATG")	#ATG position
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
 	ax2.legend()
+	"""
+	#replacing the above commented code block with the code block to overlay with and display the nucleotide sequence on the plot
+	genomic_range = genomic_end - genomic_start
+	fig_width = max(10, genomic_range / 100)
+	y_max = max(max(svalues + values), 1)
+	fig_height = max(5, y_max / 500)
+
+	# base colors for sequence track
+	base_colors = {'A': '#2ecc71', 'T': '#e74c3c', 'G': '#3498db', 'C': '#f39c12',
+				   'a': '#2ecc71', 't': '#e74c3c', 'g': '#3498db', 'c': '#f39c12',
+				   'N': '#cccccc', 'n': '#cccccc'}
+
+	# two-panel layout: coverage on top (85%), sequence track on bottom (15%)
+	fig = plt.figure(figsize=(fig_width, fig_height + 1))
+	gs = fig.add_gridspec(2, 1, height_ratios=[0.85, 0.15], hspace=0.05)
+
+	ax1 = fig.add_subplot(gs[0])
+	ax_seq = fig.add_subplot(gs[1], sharex=ax1)  # shares x-axis with coverage plot
+
+	ax2 = ax1.twinx()
+	ax1.plot(values, color="black", linestyle="solid")
+	ax2.plot(svalues, color="red", linestyle="dotted")
+
+	y_max = max(max(svalues + values), 1)
+	ax2.plot([atg_pos, atg_pos], [0, y_max], color="green", linestyle="dotted", label="ATG")
+	ax2.plot([tss_pos, tss_pos], [0, y_max], color="blue", linestyle="dotted", label="TSS")
+	ax2.legend()
+
+	# --- sequence track ---
+	ax_seq.set_xlim(0, len(dna_sequence_for_plot))
+	ax_seq.set_ylim(0, 1)
+	ax_seq.axis('off')  # hide axes frame and ticks for sequence track
+
+	if genomic_range <= 300:
+		# show individual base letters with colored background rectangles
+		for i, base in enumerate(dna_sequence_for_plot):
+			color = base_colors.get(base, '#cccccc')
+			ax_seq.add_patch(plt.Rectangle((i, 0), 1, 1, color=color, alpha=0.6))
+			ax_seq.text(i + 0.5, 0.5, base.upper(), ha='center', va='center',
+						fontsize=max(4, min(8, fig_width / len(dna_sequence_for_plot) * 10)),
+						fontweight='bold', color='black')
+	else:
+		# show color strip only — no text since bases would be illegible
+		for i, base in enumerate(dna_sequence_for_plot):
+			color = base_colors.get(base, '#cccccc')
+			ax_seq.add_patch(plt.Rectangle((i, 0), 1, 1, color=color, alpha=0.8))
+		# add a compact legend for base colors
+		for base, color in [('A', '#2ecc71'), ('T', '#e74c3c'), ('G', '#3498db'), ('C', '#f39c12')]:
+			ax_seq.plot([], [], color=color, linewidth=6, label=base)
+		ax_seq.legend(loc='upper right', ncol=4, fontsize=7,
+					  framealpha=0.7, borderpad=0.3, handlelength=1)
+
 	ax1.set_title( gene + "   (" + orientation + ")" )
-	ax1.set_xlabel( "position in genomic region from " + str( genomic_start ) + " to " + str( genomic_end ) )
-	ax1.set_ylabel( "aligned RNA-seq coverage" )
+	ax_seq.set_xlabel( "Position in genomic region from " + str( genomic_start ) + " to " + str( genomic_end ) )
+	ax1.set_ylabel( "Aligned RNA-seq coverage", labelpad=15 )
 	ax1.yaxis.label.set_color('black')
-	ax2.set_ylabel( "spanning RNA-seq coverage" )
+	ax2.set_ylabel( "Spanning RNA-seq coverage", labelpad=15 )
 	ax2.yaxis.label.set_color('red')
 	
-	fig.savefig( fig_file, dpi=300 )
+	fig.savefig( fig_file, dpi=600, bbox_inches='tight' )
+	plt.close(fig)
 
 def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_end):
 	#define head/tail coordinates based on strand
@@ -254,7 +313,7 @@ def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_
 
 
 
-def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos ):
+def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq ):
 	"""! @brief run analysis on forward strand """
 	most_upstream_pos = start
 	final_pos_status = False
@@ -315,16 +374,16 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	tss_pos = most_upstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
-	
+	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end+1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation )
+		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
 	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
 
 
-def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos ):
+def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq ):
 	"""! @brief run analysis on reverse strand """
 	
 	most_downstream_pos = end
@@ -384,9 +443,9 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	tss_pos = most_downstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
-	
+	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation )
+		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
@@ -812,7 +871,7 @@ def main( arguments ):
 			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
 			#code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
 			# Initialize with gene coordinates as default with 5'UTR checks downstream
-			start, end, orientation = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest if it does not have 5'UTRs annotated
+			start, end, orientation, contig = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation'], gene_infos[ gene ]['chromosome'] # get information about gene of interest if it does not have 5'UTRs annotated
 			# store ATG position as fixed reference before start may be modified by 5'UTR code block
 			if gene in gene_atg_dic:
 				atg_pos = gene_atg_dic[gene]
@@ -871,7 +930,7 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
-				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos )
+				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
 				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
@@ -883,7 +942,7 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
-				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos )
+				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
 				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
