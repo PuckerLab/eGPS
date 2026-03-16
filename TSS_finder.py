@@ -254,7 +254,7 @@ def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_
 
 
 
-def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
+def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos ):
 	"""! @brief run analysis on forward strand """
 	most_upstream_pos = start
 	final_pos_status = False
@@ -307,11 +307,11 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		plot_start_region = most_upstream_pos - flank_region_for_plot
 	else:
 		plot_start_region = 0
-	plot_end_region = start + flank_region_for_plot
+	plot_end_region = max(start + flank_region_for_plot, atg_genomic_pos + flank_region_for_plot)
 	
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
-	atg_pos = len( svalues )-flank_region_for_plot
+	atg_pos = atg_pos = atg_genomic_pos - plot_start_region
 	tss_pos = most_upstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
@@ -324,7 +324,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
 
 
-def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites ):
+def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos ):
 	"""! @brief run analysis on reverse strand """
 	
 	most_downstream_pos = end
@@ -371,8 +371,8 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			final_pos_status = True
 	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
 
-	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
-	plot_start_region = end - flank_region_for_plot
+	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
+	plot_start_region = min(end - flank_region_for_plot, atg_genomic_pos - flank_region_for_plot)
 	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
 		plot_end_region = most_downstream_pos + flank_region_for_plot
 	else:
@@ -380,7 +380,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
-	atg_pos = flank_region_for_plot + 0
+	atg_pos = atg_genomic_pos - plot_start_region
 	tss_pos = most_downstream_pos - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
@@ -871,7 +871,7 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
-				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos )
 				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
@@ -883,7 +883,7 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
-				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites )
+				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos )
 				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
