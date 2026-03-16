@@ -92,6 +92,7 @@ def load_gene_infos( gff_file ):
 	gene_infos = {}
 	mrna_infos = {}
 	five_utr_infos={}
+	cds_infos = {}
 	genes_per_chromosome = {}
 	transcripts_per_gene = {}
 	with open( gff_file, "r" ) as f:
@@ -125,6 +126,17 @@ def load_gene_infos( gff_file ):
 					if ";" in Parent:
 						Parent = Parent.split(';')[0]
 					five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
+				if parts[2].upper() == 'CDS':
+					cds_parents = parts[-1].split('Parent=')[-1]
+					if ";" in cds_parents:
+						cds_parents = cds_parents.split(';')[0]
+					for cds_parent in cds_parents.split(','):  # handle multiple parents
+						cds_parent = cds_parent.strip()
+						cds_tuple = (int(parts[3]), int(parts[4]))
+						try:
+							cds_infos[cds_parent].append(cds_tuple)
+						except KeyError:
+							cds_infos[cds_parent] = [cds_tuple]
 			line = f.readline()
 	for chromosome in genes_per_chromosome: #sort the genes in each contig/ chromosome in the ascending order of start positions
 		genes_per_chromosome[chromosome].sort(key=lambda gene: (gene_infos[gene]['start'], gene))
@@ -133,7 +145,31 @@ def load_gene_infos( gff_file ):
 			transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['start'], transcript))
 		elif gene_infos[gene]['orientation']=='-':
 			transcripts_per_gene[gene].sort(key=lambda transcript: (mrna_infos[transcript]['end'], transcript))
-	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos
+	gene_atg_dic = {}
+	for gene in transcripts_per_gene:
+		if gene not in gene_infos:
+			continue
+		orientation = gene_infos[gene]['orientation']
+		transcript_list = transcripts_per_gene[gene]
+
+		# select most upstream transcript for +, most downstream for -
+		if orientation == '+':
+			selected_transcript = transcript_list[0]  # already sorted by start ascending
+		else:
+			selected_transcript = transcript_list[-1]  # already sorted by end ascending, last = highest end
+
+		if selected_transcript not in cds_infos:
+			continue  # no CDS annotated for this transcript
+
+		cds_list = cds_infos[selected_transcript]
+
+		if orientation == '+':
+			cds_list.sort(key=lambda x: x[0])  # sort by start ascending
+			gene_atg_dic[gene] = cds_list[0][0]  # start of most upstream CDS = ATG
+		else:
+			cds_list.sort(key=lambda x: x[1])  # sort by end ascending
+			gene_atg_dic[gene] = cds_list[-1][1]  # end of most downstream CDS = ATG
+	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
@@ -758,7 +794,7 @@ def main( arguments ):
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos = load_gene_infos( gff_file )
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic = load_gene_infos( gff_file )
 	
 	genome_seq = load_sequences( fasta_file )
 	
@@ -777,6 +813,11 @@ def main( arguments ):
 			#code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
 			# Initialize with gene coordinates as default with 5'UTR checks downstream
 			start, end, orientation = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest if it does not have 5'UTRs annotated
+			# store ATG position as fixed reference before start may be modified by 5'UTR code block
+			if gene in gene_atg_dic:
+				atg_pos = gene_atg_dic[gene]
+			else:
+				atg_pos = start if orientation == '+' else end  # fallback to gene boundary if no CDS found
 			if gene in transcripts_per_gene:
 				transcript_list = transcripts_per_gene[ gene ]
 				for each in transcript_list:
@@ -850,7 +891,7 @@ def main( arguments ):
 				results.update( { gene: result } )
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
-			distance = abs((results[gene]['TSS']) - start)  # distance between predicted TSS and gene start
+			distance = abs((results[gene]['TSS']) - atg_pos)  # distance between predicted TSS and upstream CDS start (+ gene)/ downstream CDS end (- gene)
 			"""
 			total_contribution = avg_cov_gene + distance + isoforms
 			coverage_score = (avg_cov_gene / total_contribution)  # contribution of coverage to total score
