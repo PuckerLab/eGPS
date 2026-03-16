@@ -212,7 +212,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, g
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
 	ax2.legend()
 	"""
-	#replacing the above commented code block with the code block to overlay with and display the nucleotide sequence on the plot
+	#replacing the above commented code block with the code block below to overlay with and display the nucleotide sequence on the plot
 	genomic_range = genomic_end - genomic_start
 	fig_width = max(10, genomic_range / 100)
 	y_max = max(max(svalues + values), 1)
