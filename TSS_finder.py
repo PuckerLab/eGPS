@@ -30,6 +30,7 @@ __usage__ = """
 
 
 import re, os, sys, subprocess, gzip
+import tempfile
 import numpy as np
 from decimal import Decimal, ROUND_HALF_DOWN
 from collections import defaultdict
@@ -197,13 +198,28 @@ def load_sequences( fasta_file ):
 
 def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot ):
 	"""! @brief generate a coverage plot """
+	fig, ax1 = plt.subplots()
+	ax1.plot(values, color="black", linestyle="solid")  # coverage of aligned bases
+	ax2 = ax1.twinx()
+	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
+	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
+	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
+	ax2.legend()
+
+	ax1.set_title(gene + "   (" + orientation + ")")
+	ax1.set_xlabel("Position in genomic region from " + str(genomic_start) + " to " + str(genomic_end))
+	ax1.set_ylabel("Aligned RNA-seq coverage")
+	ax1.yaxis.label.set_color('black')
+	ax2.set_ylabel("Spanning RNA-seq coverage")
+	ax2.yaxis.label.set_color('red')
+	"""
 	#adaptive figure sizing based on coverage intervals and genomic range
 	genomic_range = genomic_end - genomic_start
 	fig_width = max(10, genomic_range / 100)  # 1 inch per 100 bp, minimum 10 inches
 
 	y_max = max(max(svalues + values), 1)
 	fig_height = max(5, y_max / 500)  # 1 inch per 500 coverage units, minimum 5 inches
-	"""
+	
 	fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
 	ax1.plot( values, color="black", linestyle="solid" )	#coverage of aligned bases
 	ax2 = ax1.twinx()
@@ -211,7 +227,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, g
 	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted", label="ATG")	#ATG position
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
 	ax2.legend()
-	"""
+	
 	#replacing the above commented code block with the code block below to overlay with and display the nucleotide sequence on the plot
 	genomic_range = genomic_end - genomic_start
 	fig_width = max(10, genomic_range / 100)
@@ -269,7 +285,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, g
 	ax1.yaxis.label.set_color('black')
 	ax2.set_ylabel( "Spanning RNA-seq coverage", labelpad=15 )
 	ax2.yaxis.label.set_color('red')
-	
+	"""
 	fig.savefig( fig_file, dpi=600, bbox_inches='tight' )
 	plt.close(fig)
 
@@ -507,10 +523,12 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
+		"""
 		if 'TATAAAA' in promoter.upper() or 'TATAAAT' in promoter.upper() or 'TATATAA' in promoter.upper() or 'TATATAT' in promoter.upper():
 			tata_status = "TATA box found!"
 		else:
 			tata_status = 'No TATA box detected ...'
+		"""
 	else:	#reverse strand
 		if (hard_cutoff - tss) > min_promoter_size:
 			if (hard_cutoff - tss) > max_promoter_size:
@@ -523,12 +541,66 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ gene_end:hard_cutoff ]
 			promoter_status = False
+		"""
 		if 'TTTTATA' in promoter.upper() or 'ATTTATA' in promoter.upper() or 'TTATATA' in promoter.upper() or 'ATATATA' in promoter.upper():#searching for reverse complements of TATA consensus sequences in the reverse strand genes
 			tata_status = "TATA box found!"
 		else:
 			tata_status = 'No TATA box detected ...'
-	return promoter_status, promoter, tata_status
+		"""
+	return promoter_status, promoter
 
+#function to sort sequences from MOODS results on the basis of strandedness and proximity to TSS
+def sort_key(row, orientation):
+	position = int(row[2])
+	strand=row[3]
+	if orientation == '+':
+		priority = 0 if strand == '+' else 1
+	elif orientation == '-':
+		priority = 0 if strand =='-' else 1
+	if strand == '+':
+		return(priority,-position)
+	elif strand == '-':
+		return(priority, position)
+
+#function to scan extracted promoter sequences for TATA binding motifs
+def promoter_motif_analysis (gene, orientation, promoter_seq, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
+	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
+	try:
+		tmp.write(f">{gene}\n{promoter_seq}\n")
+		tmp.flush()
+		tmp.close()
+		moods_output_file = os.path.join(tmp_folder,f"{gene}_moods.txt")
+		cmd = 'python3 ' + moods + ' -m ' + pfm_folder+'/*.pfm ' + '-s ' + tmp.name + ' -p ' + str(pvalue) + ' -o ' + moods_output_file
+		p = subprocess.Popen(args=cmd, shell=True)
+		p.communicate()
+		rows = []
+		with open (moods_output_file, 'r') as f:
+			line = f.readline()
+			while line:
+				row = line.strip().rstrip(',').split(',')
+				rows.append(row)
+				line=f.readline()
+		sorted_rows = sorted(rows,key=lambda row:sort_key(row,orientation))
+		best_motif_hits=sorted_rows[:(top_motifs)]
+		motif_closeness = None
+		for hit in best_motif_hits:
+			if orientation=='+':
+				pos = int(hit[2])
+				if len(promoter_seq) - pos <= tss_prox:
+					motif_closeness = 'proximal motif'
+				else:
+					motif_closeness = 'distal motif'
+			elif orientation=='-':
+				pos=int(hit[2])
+				if pos <= tss_prox:
+					motif_closeness = 'proximal motif'
+				else:
+					motif_closeness = 'distal motif'
+			hit.append(motif_closeness)
+	finally:
+		if os.path.exists(tmp.name):
+			os.remove(tmp.name)
+	return best_motif_hits
 
 def main( arguments ):
 	"""! @brief run everything """
@@ -561,6 +633,11 @@ def main( arguments ):
 		output_folder += "/"
 	if not os.path.exists( output_folder ):
 		os.makedirs( output_folder )
+
+	#tmp folder
+	tmp_folder = os.path.join(output_folder,'Tmp')
+	if not os.path.exists(tmp_folder):
+		os.makedirs(tmp_folder)
 
 	if '--samtools' in arguments:
 		samtools = arguments[arguments.index('--samtools') + 1]
@@ -703,6 +780,37 @@ def main( arguments ):
 		sra_folder = arguments[arguments.index('--sra_folder')+1]
 	else:
 		sra_folder = ''
+
+	if '--analyse_promoter' in arguments: #yes or no for promoter analysis with MOODS
+		promoter_analysis = arguments[arguments.index('--analyse_promoter')+1]
+	else:
+		promoter_analysis = 'no'
+
+	if '--moods' in arguments: #full path to moods python script
+		moods = arguments[arguments.index('--moods')+1]
+	else:
+		moods = 'moods-dna.py'
+
+	if promoter_analysis == 'yes':
+		#full path to folder with PFM matrices
+		pfm_folder = arguments[arguments.index('--PFM')+1]
+
+	#p-value threshold for MOODS analysis
+	if '--pval' in arguments:
+		pvalue = float(arguments[arguments.index('--pval')+1])
+	else:
+		pvalue = 0.0001
+
+	if '--top_motif_hit' in arguments:
+		top_motifs = int(arguments[arguments.index('--top_motif_hit')+1])
+	else:
+		top_motifs = 1
+
+	if '--tss_proximity' in arguments:
+		tss_prox = int(arguments[arguments.index('--tss_proximity')+1])
+	else:
+		tss_prox = 30
+
 
 	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
 	if run_mode == 'make_bam':
@@ -859,6 +967,7 @@ def main( arguments ):
 	
 	#run analysis per gene of interest
 	results = {}
+	motifs = []
 	#confidence_score_dic = {}
 	isoforms_dic = {}
 	distance_dic = {}
@@ -931,10 +1040,12 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
-				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				if promoter_analysis == 'yes':
+					best_motif_hits = promoter_motif_analysis(gene, orientation, promoter, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
+					motifs.append(best_motif_hits)
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
-				result.update({'TATA_box': tata_status})
 				results.update( { gene: result } )
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
@@ -943,10 +1054,12 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
-				promoter_status, promoter, tata_status = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				if promoter_analysis == 'yes':
+					best_motif_hits = promoter_motif_analysis(gene, orientation, promoter, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
+					motifs.append(best_motif_hits)
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
-				result.update({'TATA_box': tata_status})
 				results.update( { gene: result } )
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
@@ -969,9 +1082,10 @@ def main( arguments ):
 				confidence_score_dic[gene] = "NA"
 			"""
 	# --- report TSS in output file --- #
-	final_output_file = output_folder + "results.txt"
+	final_output_file = output_folder + "Results.txt"
+	promoter_motif_output_file = os.path.join(output_folder,'Top_promoter_motifs.txt')
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "TATA box analysis", "Additional comments" ] ) + "\n" )
+		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
 		for gene in list( results.keys() ):
 			out.write( "\t".join( [ 	gene,
 												str( results[ gene ]['TSS'] ),
@@ -981,9 +1095,17 @@ def main( arguments ):
 												str( results[ gene ]['end'] ),
 												str( results[ gene ]['promoter_status'] ),
 												str( results[ gene ]['promoter'] ),
-												str(results[gene]['TATA_box']),
 												str(five_utr_dic[gene])
 										] ) + "\n" )
+	# --- write top promoter motif hits in a separate output file --- #
+	if promoter_analysis == 'yes':
+		if motifs:
+			with open (promoter_motif_output_file,'w')as out:
+				for hit_list in motifs:
+					for hits in hit_list:
+						out.write('\t'.join(hits)+'\n')
+		else:
+			print('No valid top motifs list found. Promoter motif analysis file not written.')
 
 
 if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
