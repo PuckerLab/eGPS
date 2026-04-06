@@ -37,6 +37,8 @@ from collections import defaultdict
 try:
 	import matplotlib.pyplot as plt
 	from matplotlib.lines import Line2D
+	import matplotlib.ticker as ticker
+	from matplotlib.patches import FancyArrow
 except ImportError:
 	pass
 
@@ -171,7 +173,7 @@ def load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attr
 		else:
 			cds_list.sort(key=lambda x: x[1])  # sort by end ascending
 			gene_atg_dic[gene] = cds_list[-1][1]  # end of most downstream CDS = ATG
-	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic
+	return gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
@@ -197,9 +199,9 @@ def load_sequences( fasta_file ):
 	return sequences
 
 
-def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot ):
+def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
 	"""! @brief generate a coverage plot """
-	fig, ax1 = plt.subplots()
+	fig, (ax1, ax_features) = plt.subplots(2, 1, figsize=(10, 6), gridspec_kw={'height_ratios':[4,1]}, sharex=True)
 	ax1.plot(values, color="black", linestyle="solid")  # coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
@@ -207,8 +209,52 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or rnd or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
 	ax2.legend()
+	"""
+	# feature track plotting with features represented as rectangles
+	for mrna_start, mrna_end in mrnas_to_plot:
+		ax_features.broken_barh([(mrna_start, mrna_end - mrna_start)], (0.1, 0.2), facecolors='steelblue')
+	for cds_start, cds_end in cds_to_plot:
+		ax_features.broken_barh([(cds_start, cds_end - cds_start)], (0.4, 0.2), facecolors='lightgreen')
+	for five_utr_start, five_utr_end in mrnas_to_plot:
+		ax_features.broken_barh([(five_utr_start, five_utr_end - five_utr_start)], (0.7, 0.2), facecolors='salmon')
+	"""
+	# feature track plotting with features represented as arrows
+	for mrna_start, mrna_end in mrnas_to_plot:
+		feature_length = mrna_end - mrna_start
+		if orientation == '+':
+			dx = feature_length
+		elif orientation == '-':
+			dx = -feature_length
+		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+		arrow = FancyArrow(x=mrna_start, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='steelblue')
+		ax_features.add_patch(arrow)
+	for cds_start, cds_end in cds_to_plot:
+		feature_length = cds_end - cds_start
+		if orientation == '+':
+			dx = feature_length
+		elif orientation == '-':
+			dx = -feature_length
+		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+		arrow = FancyArrow(x=cds_start, y=0.5, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='lightgreen')
+		ax_features.add_patch(arrow)
+	for five_utr_start, five_utr_end in five_utr_to_plot:
+		feature_length = five_utr_end - five_utr_start
+		if orientation == '+':
+			dx = feature_length
+		elif orientation == '-':
+			dx = -feature_length
+		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+		arrow = FancyArrow(x=five_utr_start, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='salmon')
+		ax_features.add_patch(arrow)
+
+	# extend vertical lines into feature axis
+	ax_features.axvline(atg_pos, color="green", linestyle="dotted")
+	ax_features.axvline(cov_walk_start, color="orange", linestyle="dotted")
+	ax_features.axvline(tss_pos, color="blue", linestyle="dotted")
 
 	ax1.set_title(gene + "   (" + orientation + ")")
+	ax_features.set_yticks([0.2, 0.5, 0.8])
+	ax_features.set_yticklabels(['mRNA', 'CDS', "5'UTR"], fontsize=8)
 	ax1.set_xlabel("Position in genomic region from " + str(genomic_start) + " to " + str(genomic_end))
 	ax1.set_ylabel("Aligned RNA-seq coverage")
 	ax1.yaxis.label.set_color('black')
@@ -331,7 +377,7 @@ def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_
 
 
 
-def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq ):
+def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos ):
 	"""! @brief run analysis on forward strand """
 	most_upstream_pos = start
 	final_pos_status = False
@@ -379,13 +425,57 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			final_pos_status = True
 	print( "TSS position of " + gene + ": " + str( most_upstream_pos ) )
 	
-	# --- generate figures to visualize coverage around the TSS for manual inspection --- #	
+	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
+	transcript_list = transcripts_per_gene[gene]
+	mrna_dic = {}
+	cds_dic={}
+	five_utr_dic={}
+	for each in transcript_list:
+		mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+		cds_dic[each] = cds_infos[each]
+		five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
 	if most_upstream_pos > flank_region_for_plot:
 		plot_start_region = most_upstream_pos - flank_region_for_plot
 	else:
 		plot_start_region = 0
 	plot_end_region = max(start + flank_region_for_plot, atg_genomic_pos + flank_region_for_plot)
-	
+	mrnas_to_plot = []
+	cds_to_plot = []
+	five_utr_to_plot = []
+	for transcript, (mrna_start, mrna_end) in mrna_dic.items():
+		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region), (mrna_end - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				mrnas_to_plot.append((0, (mrna_end - plot_start_region)))
+			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region),(plot_end_region - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				mrnas_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	for transcript, cds_list in cds_dic.items():
+		for (cds_start, cds_end) in cds_list:#two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			if cds_end >= plot_start_region and cds_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+				if cds_start >= plot_start_region and cds_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+					cds_to_plot.append((0, (cds_end - plot_start_region)))
+				elif cds_start >= plot_start_region and cds_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region),(plot_end_region - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
+		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
+			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region),(plot_end_region - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
 	atg_pos = atg_genomic_pos - plot_start_region
@@ -395,14 +485,14 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	orientation = "+"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end+1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
+		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
 		print( "ERROR: plot failed" + gene )
 		
 	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
 
 
-def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq ):
+def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos ):
 	"""! @brief run analysis on reverse strand """
 	
 	most_downstream_pos = end
@@ -450,12 +540,57 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
 
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
+	transcript_list = transcripts_per_gene[gene]
+	mrna_dic = {}
+	cds_dic={}
+	five_utr_dic={}
+	for each in transcript_list:
+		mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+		cds_dic[each] = cds_infos[each]
+		five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
 	plot_start_region = min(end - flank_region_for_plot, atg_genomic_pos - flank_region_for_plot)
 	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
 		plot_end_region = most_downstream_pos + flank_region_for_plot
 	else:
 		plot_end_region = len( seq_per_contig )
-		
+
+	mrnas_to_plot = []
+	cds_to_plot = []
+	five_utr_to_plot = []
+	for transcript, (mrna_start, mrna_end) in mrna_dic.items():
+		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region), (mrna_end - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				mrnas_to_plot.append((0, (mrna_end - plot_start_region)))
+			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region),(plot_end_region - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				mrnas_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	for transcript, cds_list in cds_dic.items():
+		for (cds_start, cds_end) in cds_list:#two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			if cds_end >= plot_start_region and cds_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+				if cds_start >= plot_start_region and cds_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+					cds_to_plot.append((0, (cds_end - plot_start_region)))
+				elif cds_start >= plot_start_region and cds_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region),(plot_end_region - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
+		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
+			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
+			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:#case3 where feature end is out of the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region),(plot_end_region - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
 	atg_pos = atg_genomic_pos - plot_start_region
@@ -465,7 +600,7 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	orientation = "-"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
+		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
 		print( "ERROR: plot failed" + gene )
 		
@@ -568,8 +703,9 @@ def sort_key(row, orientation):
 
 #function to scan extracted promoter sequences for TATA binding motifs
 def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
-	motif_plot = os.path.join(output_folder,'Motif_hits.png')
+	motif_plot = os.path.join(output_folder,f'{gene}_motif_hits.png')
 	tss = result['TSS']
+	promoter_length = len(promoter_seq)
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
 	try:
 		tmp.write(f">{gene}\n{promoter_seq}\n")
@@ -607,7 +743,7 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 				else:
 					motif_closeness = 'distal motif'
 				actual_motif_pos = tss - (int(hit[2]))
-				hit[2]=actual_motif_pos
+				hit[2]= str(actual_motif_pos)
 			elif orientation=='-':
 				pos=int(hit[2])
 				if pos <= tss_prox:
@@ -615,24 +751,35 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 				else:
 					motif_closeness = 'distal motif'
 				actual_motif_pos = tss + (int(hit[2]))
-				hit[2] = actual_motif_pos
+				hit[2] = str(actual_motif_pos)
 			hit.append(motif_closeness)
 		#plotting motif density lollipop plot
+		# histogram layer
+		positions = list(pos_strand.keys())
 		fig, ax = plt.subplots()
-		for pos, sign in pos_strand.items():
-			if sign == orientation:
-				colour = 'green'
-			else:
-				colour = 'red'
-			ax.vlines(pos, ymin=0, ymax=1, linestyle='dotted', color=colour, linewidth=2)
-			ax.plot(pos, 1, 'o', color=colour, markersize=4)
+		if positions:
+			range_start = min(min(positions), tss - promoter_length)
+			range_end = max(max(positions), tss + promoter_length)
+			bins = range(range_start, range_end + tss_prox, tss_prox)
+			ax.hist(positions, bins=bins, color='lightgray', edgecolor='white', zorder=1)
+			# lollipops — scale height to histogram y range after drawing hist
+			y_max = ax.get_ylim()[1]
+			heights = [y_max * 0.4, y_max * 0.6, y_max * 0.8, y_max * 1.0]  # proportional to histogram scale
+			for i, (pos, sign) in enumerate(pos_strand.items()):
+				colour = 'green' if sign == orientation else 'red'
+				h = heights[i % len(heights)]
+				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
+				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
 		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2)
 		ax.set_yticks([])  # no y-axis needed
 		ax.set_xlabel('Genomic position')
 		ax.axhline(0, color='black', linewidth=0.5)  # baseline
+		ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
+		ax.ticklabel_format(style='plain', axis='x')
 		legend_elements = [
 			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
-			Line2D([0], [0], color='gray', linewidth=1, linestyle='dotted', label='TATA motif')
+			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='TATA motif (same orientation)'),
+			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='TATA motif (reverse orientation)')
 		]
 		ax.legend(handles=legend_elements)
 		plt.tight_layout()
@@ -1022,7 +1169,7 @@ def main( arguments ):
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
 	
 	genome_seq = load_sequences( fasta_file )
 	
@@ -1100,7 +1247,7 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
-				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
+				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
@@ -1117,7 +1264,7 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
-				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
+				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
