@@ -36,6 +36,7 @@ from decimal import Decimal, ROUND_HALF_DOWN
 from collections import defaultdict
 try:
 	import matplotlib.pyplot as plt
+	from matplotlib.lines import Line2D
 except ImportError:
 	pass
 
@@ -196,13 +197,14 @@ def load_sequences( fasta_file ):
 	return sequences
 
 
-def generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot ):
+def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot ):
 	"""! @brief generate a coverage plot """
 	fig, ax1 = plt.subplots()
 	ax1.plot(values, color="black", linestyle="solid")  # coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
 	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
+	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or rnd or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
 	ax2.legend()
 
@@ -338,7 +340,7 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 		# --- walk coverage upstream of transcription start while there is coverage --- #
 		while cov_per_contig[ most_upstream_pos-2 ] >= mincov:	#index = genomic position -1 but coverage of gene that is next to the current position needs to be assessed before moving in there
 			most_upstream_pos -= 1	#move one step upstream
-			if most_upstream_pos == hard_cutoff:	#stop if start of contig/pseudochromosome is reached
+			if most_upstream_pos == hard_cutoff:	#stop if end of upstream contig/pseudochromosome is reached
 				break
 		
 		# --- try to cross intron --- #
@@ -386,13 +388,14 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	
 	values = cov_per_contig[ plot_start_region:plot_end_region ]
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
-	atg_pos = atg_pos = atg_genomic_pos - plot_start_region
+	atg_pos = atg_genomic_pos - plot_start_region
 	tss_pos = most_upstream_pos - plot_start_region
+	cov_walk_start = start - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end+1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
+		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
@@ -457,11 +460,12 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
 	atg_pos = atg_genomic_pos - plot_start_region
 	tss_pos = most_downstream_pos - plot_start_region
+	cov_walk_start = end - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
+		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot )
 	except:
 		print( "ERROR: plot failed" + gene )
 		
@@ -563,7 +567,9 @@ def sort_key(row, orientation):
 		return(priority, position)
 
 #function to scan extracted promoter sequences for TATA binding motifs
-def promoter_motif_analysis (gene, orientation, promoter_seq, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
+def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
+	motif_plot = os.path.join(output_folder,'Motif_hits.png')
+	tss = result['TSS']
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
 	try:
 		tmp.write(f">{gene}\n{promoter_seq}\n")
@@ -581,6 +587,16 @@ def promoter_motif_analysis (gene, orientation, promoter_seq, moods, pvalue, top
 				rows.append(row)
 				line=f.readline()
 		sorted_rows = sorted(rows,key=lambda row:sort_key(row,orientation))
+		#collecting position-sign dictionary elements for motif density plot making
+		pos_strand={}
+		for hit in sorted_rows:
+			if orientation == '+':
+				plot_pos = tss - (int(hit[2]))
+				pos_strand[plot_pos]=hit[3]
+			elif orientation == '-':
+				plot_pos = tss + (int(hit[2]))
+				pos_strand[plot_pos] = hit[3]
+
 		best_motif_hits=sorted_rows[:(top_motifs)]
 		motif_closeness = None
 		for hit in best_motif_hits:
@@ -590,13 +606,38 @@ def promoter_motif_analysis (gene, orientation, promoter_seq, moods, pvalue, top
 					motif_closeness = 'proximal motif'
 				else:
 					motif_closeness = 'distal motif'
+				actual_motif_pos = tss - (int(hit[2]))
+				hit[2]=actual_motif_pos
 			elif orientation=='-':
 				pos=int(hit[2])
 				if pos <= tss_prox:
 					motif_closeness = 'proximal motif'
 				else:
 					motif_closeness = 'distal motif'
+				actual_motif_pos = tss + (int(hit[2]))
+				hit[2] = actual_motif_pos
 			hit.append(motif_closeness)
+		#plotting motif density lollipop plot
+		fig, ax = plt.subplots()
+		for pos, sign in pos_strand.items():
+			if sign == orientation:
+				colour = 'green'
+			else:
+				colour = 'red'
+			ax.vlines(pos, ymin=0, ymax=1, linestyle='dotted', color=colour, linewidth=2)
+			ax.plot(pos, 1, 'o', color=colour, markersize=4)
+		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2)
+		ax.set_yticks([])  # no y-axis needed
+		ax.set_xlabel('Genomic position')
+		ax.axhline(0, color='black', linewidth=0.5)  # baseline
+		legend_elements = [
+			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
+			Line2D([0], [0], color='gray', linewidth=1, linestyle='dotted', label='TATA motif')
+		]
+		ax.legend(handles=legend_elements)
+		plt.tight_layout()
+		plt.savefig(motif_plot, dpi=600)
+
 	finally:
 		if os.path.exists(tmp.name):
 			os.remove(tmp.name)
@@ -1042,8 +1083,11 @@ def main( arguments ):
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
 				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
-					best_motif_hits = promoter_motif_analysis(gene, orientation, promoter, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
-					motifs.append(best_motif_hits)
+					if os.path.exists(moods):
+						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
+						motifs.append(best_motif_hits)
+					else:
+						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
 				results.update( { gene: result } )
@@ -1056,8 +1100,11 @@ def main( arguments ):
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq )
 				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
-					best_motif_hits = promoter_motif_analysis(gene, orientation, promoter, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
-					motifs.append(best_motif_hits)
+					if os.path.exists(moods):
+						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
+						motifs.append(best_motif_hits)
+					else:
+						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
 				result.update( { 'promoter': promoter } )
 				results.update( { gene: result } )
