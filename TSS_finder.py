@@ -88,7 +88,7 @@ def load_coverage( cov_file, input_mode ):
 	return coverage_per_seq
 
 
-def load_gene_infos( gff_file ):
+def load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute):
 	"""! @brief load gene ID, position, and orientation from GFF3 file """
 	
 	gene_infos = {}
@@ -103,7 +103,7 @@ def load_gene_infos( gff_file ):
 			if line[0] != "#":
 				parts = line.strip().split('\t')
 				if parts[2].upper() == "GENE" or parts[2].upper() == "TRANSPOSABLE_ELEMENT_GENE" or parts[2].upper() == "PSEUDOGENE" or parts[2].upper() == "PSEUDO_GENE":	#could be extended to other feature types
-					ID = parts[-1].split('ID=')[-1]
+					ID = parts[-1].split(f'{parent_attribute}=')[-1]
 					if ";" in ID:
 						ID = ID.split(';')[0]
 					gene_infos.update( { ID: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } } )
@@ -112,10 +112,10 @@ def load_gene_infos( gff_file ):
 					except KeyError:
 						genes_per_chromosome.update( { parts[0]: [ ID ] } )
 				if parts[2].upper() == "MRNA":
-					ID = parts[-1].split('ID=')[-1]
+					ID = parts[-1].split(f'{child_attribute}=')[-1]
 					if ";" in ID:
 						ID = ID.split(';')[0]
-					Parent = parts[-1].split('Parent=')[-1]
+					Parent = parts[-1].split(f'{child_parent_linker}=')[-1]
 					if ";" in Parent:
 						Parent = Parent.split(';')[0]
 					mrna_infos.update( { ID: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } } )
@@ -124,12 +124,12 @@ def load_gene_infos( gff_file ):
 					except KeyError:
 						transcripts_per_gene.update( { Parent: [ ID ] } )
 				if parts[2].upper() == 'FIVE_PRIME_UTR':
-					Parent = parts[-1].split('Parent=')[-1]#Parent of 5'UTR is transcript
+					Parent = parts[-1].split(f'{child_parent_linker}=')[-1]#Parent of 5'UTR is transcript
 					if ";" in Parent:
 						Parent = Parent.split(';')[0]
 					five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
 				if parts[2].upper() == 'CDS':
-					cds_parents = parts[-1].split('Parent=')[-1]
+					cds_parents = parts[-1].split(f'{child_parent_linker}=')[-1]
 					if ";" in cds_parents:
 						cds_parents = cds_parents.split(';')[0]
 					for cds_parent in cds_parents.split(','):  # handle multiple parents
@@ -667,7 +667,21 @@ def main( arguments ):
 				if len( line.strip() ) > 3:
 					goi.append( line.strip() )
 	print( "Number of detected genes of interest: " + str( len( goi ) ) )
-	
+
+	#gff file config params
+	if '--gff_config' in arguments:
+		gff_config_file = arguments[arguments.index('--gff_config')+1]
+		with open (gff_config_file, 'r') as f:
+			for line in f:
+				parts = line.strip().split()
+				child_attribute = parts[0]
+				child_parent_linker = parts[1]
+				parent_attribute = parts[2]
+	else:
+		child_attribute = 'ID'
+		child_parent_linker = 'Parent'
+		parent_attribute = 'ID'
+
 	#output folder
 	output_folder = arguments[ arguments.index('--out')+1 ]
 	if output_folder[-1] != "/":
@@ -822,6 +836,12 @@ def main( arguments ):
 	else:
 		sra_folder = ''
 
+	if '--fastq_pattern' in arguments:
+		pattern_names=arguments[arguments.index('--fastq_patern')+1]#specify fastq read file name pattern for the paired end files separated by commas without spaces like - _pass_1,_pass_2_
+		pattern_names_list = pattern_names.split(',')
+	else:
+		pattern_names_list = ["_pass_1", "_pass_2"]
+
 	if '--analyse_promoter' in arguments: #yes or no for promoter analysis with MOODS
 		promoter_analysis = arguments[arguments.index('--analyse_promoter')+1]
 	else:
@@ -941,12 +961,12 @@ def main( arguments ):
 					# Store the full path instead of just filename
 					full_path = os.path.join(root, f)
 
-					if "_pass_1" in f:
-						sample = f.split("_pass_1.")[0]
+					if pattern_names_list[0] in f:
+						sample = f.split(f"{pattern_names_list[0]}.")[0]
 						pairs[sample]["R1"] = full_path
 
-					elif "_pass_2" in f:
-						sample = f.split("_pass_2.")[0]
+					elif pattern_names_list[1] in f:
+						sample = f.split(f"{pattern_names_list[1]}.")[0]
 						pairs[sample]["R2"] = full_path
 			# Add check to ensure pairs were found
 			if not pairs:
@@ -1002,7 +1022,7 @@ def main( arguments ):
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
 	
-	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic = load_gene_infos( gff_file )
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
 	
 	genome_seq = load_sequences( fasta_file )
 	
