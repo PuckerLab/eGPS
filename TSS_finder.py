@@ -31,6 +31,7 @@ __usage__ = """
 
 import re, os, sys, subprocess, gzip
 import tempfile
+import traceback
 import numpy as np
 from decimal import Decimal, ROUND_HALF_DOWN
 from collections import defaultdict
@@ -208,7 +209,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
 	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or rnd or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
 	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
-	ax2.legend()
+	ax2.legend(loc='best')
 	"""
 	# feature track plotting with features represented as rectangles
 	for mrna_start, mrna_end in mrnas_to_plot:
@@ -223,28 +224,34 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 		feature_length = mrna_end - mrna_start
 		if orientation == '+':
 			dx = feature_length
+			x_origin = mrna_start
 		elif orientation == '-':
 			dx = -feature_length
+			x_origin = mrna_end
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=mrna_start, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='steelblue')
+		arrow = FancyArrow(x=x_origin, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='steelblue', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
 	for cds_start, cds_end in cds_to_plot:
 		feature_length = cds_end - cds_start
 		if orientation == '+':
 			dx = feature_length
+			x_origin = cds_start
 		elif orientation == '-':
 			dx = -feature_length
+			x_origin = cds_end
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=cds_start, y=0.5, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='lightgreen')
+		arrow = FancyArrow(x=x_origin, y=0.5, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='lightgreen', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
 	for five_utr_start, five_utr_end in five_utr_to_plot:
 		feature_length = five_utr_end - five_utr_start
 		if orientation == '+':
 			dx = feature_length
+			x_origin = five_utr_start
 		elif orientation == '-':
 			dx = -feature_length
+			x_origin = five_utr_end
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=five_utr_start, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, color='salmon')
+		arrow = FancyArrow(x=x_origin, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='salmon', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
 
 	# extend vertical lines into feature axis
@@ -431,9 +438,12 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	cds_dic={}
 	five_utr_dic={}
 	for each in transcript_list:
-		mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
-		cds_dic[each] = cds_infos[each]
-		five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
+		if each in mrna_infos:
+			mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+		if each in cds_infos:
+			cds_dic[each] = cds_infos[each]
+		if each in five_utr_infos:
+			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
 	if most_upstream_pos > flank_region_for_plot:
 		plot_start_region = most_upstream_pos - flank_region_for_plot
 	else:
@@ -545,9 +555,12 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	cds_dic={}
 	five_utr_dic={}
 	for each in transcript_list:
-		mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
-		cds_dic[each] = cds_infos[each]
-		five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
+		if each in mrna_infos:
+			mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+		if each in cds_infos:
+			cds_dic[each] = cds_infos[each]
+		if each in five_utr_infos:
+			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
 	plot_start_region = min(end - flank_region_for_plot, atg_genomic_pos - flank_region_for_plot)
 	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
 		plot_end_region = most_downstream_pos + flank_region_for_plot
@@ -754,34 +767,29 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 				hit[2] = str(actual_motif_pos)
 			hit.append(motif_closeness)
 		#plotting motif density lollipop plot
-		# histogram layer
 		positions = list(pos_strand.keys())
 		fig, ax = plt.subplots()
-		if positions:
-			range_start = min(min(positions), tss - promoter_length)
-			range_end = max(max(positions), tss + promoter_length)
-			bins = range(range_start, range_end + tss_prox, tss_prox)
-			ax.hist(positions, bins=bins, color='lightgray', edgecolor='white', zorder=1)
-			# lollipops — scale height to histogram y range after drawing hist
-			y_max = ax.get_ylim()[1]
-			heights = [y_max * 0.4, y_max * 0.6, y_max * 0.8, y_max * 1.0]  # proportional to histogram scale
-			for i, (pos, sign) in enumerate(pos_strand.items()):
-				colour = 'green' if sign == orientation else 'red'
-				h = heights[i % len(heights)]
-				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
-				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
-		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2)
+
+		fixed_heights = [0.4, 0.6, 0.8, 1.0]  # fixed height levels since no histogram to scale to
+
+		for i, (pos, sign) in enumerate(pos_strand.items()):
+			colour = 'green' if sign == orientation else 'red'
+			h = fixed_heights[i % len(fixed_heights)]
+			ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
+			ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
+		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2, zorder=3)
 		ax.set_yticks([])  # no y-axis needed
 		ax.set_xlabel('Genomic position')
 		ax.axhline(0, color='black', linewidth=0.5)  # baseline
 		ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
 		ax.ticklabel_format(style='plain', axis='x')
+		plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 		legend_elements = [
 			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
 			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='TATA motif (same orientation)'),
 			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='TATA motif (reverse orientation)')
 		]
-		ax.legend(handles=legend_elements)
+		ax.legend(handles=legend_elements, loc='best')
 		plt.tight_layout()
 		plt.savefig(motif_plot, dpi=600)
 
@@ -1288,8 +1296,9 @@ def main( arguments ):
 			isoforms_dic[gene]=isoforms
 			distance_dic[gene]=distance
 			coverage_dic[gene]=avg_cov_gene
-		except KeyError:
-			print( "Missing gene error: " + gene )
+		except KeyError as e:
+			print(f"Missing gene error: {gene}, missing key: {e}")
+			traceback.print_exc()
 			"""
 			# If gene was added to results but confidence calculation failed, add fall back
 			if gene in results and gene not in confidence_score_dic:
