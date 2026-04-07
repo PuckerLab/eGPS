@@ -1305,8 +1305,8 @@ def main( arguments ):
 				confidence_score_dic[gene] = "NA"
 			"""
 	# --- report TSS in output file --- #
-	final_output_file = output_folder + "Results.txt"
-	promoter_motif_output_file = os.path.join(output_folder,'Top_promoter_motifs.txt')
+	final_output_file = output_folder + "Results.tsv"
+	promoter_motif_output_file = os.path.join(output_folder,'Top_promoter_motifs.tsv')
 	with open( final_output_file, "w" ) as out:
 		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
 		for gene in list( results.keys() ):
