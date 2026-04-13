@@ -1148,12 +1148,17 @@ def main( arguments ):
 						p.communicate()
 			#merging all the sorted BAM files obtained from STARlong mapping
 			bam_files=os.path.join(output_folder,'bam_files.txt')
-			if len(os.listdir(star_mapping_folder)) > 1:
+			bam_list = [
+				os.path.join(star_mapping_folder, f)
+				for f in os.listdir(star_mapping_folder)
+				if f.endswith('.bam')
+			]
+			if len(bam_list) > 1:
 				with open(bam_files, 'w') as out:
-					for f in os.listdir(star_mapping_folder):
+					for f in bam_list:
 						if f.endswith('bam'):
 							out.write(f + '\n')
-				merged_bam=os.path.join(output_folder,sample+'_merged.bam')
+				merged_bam=os.path.join(output_folder,'merged.bam')
 				cmd = samtools+' merge -o '+merged_bam+' -b '+bam_files
 				p = subprocess.Popen(args=cmd, shell=True)
 				p.communicate()
