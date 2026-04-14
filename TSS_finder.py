@@ -668,13 +668,18 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			if (tss - hard_cutoff) > max_promoter_size:
 				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
 				promoter_status = True
+				downstream_to_tss = seq_per_contig[ tss:tss+max_promoter_size ]
 			else:
 				promoter = seq_per_contig[ hard_cutoff:tss ]
 				promoter_status = True
+				down = tss - hard_cutoff
+				downstream_to_tss = seq_per_contig[tss:tss + down]
 		else:
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
+			down = gene_start - hard_cutoff
+			downstream_to_tss = seq_per_contig[gene_start:gene_start+down]
 		"""
 		if 'TATAAAA' in promoter.upper() or 'TATAAAT' in promoter.upper() or 'TATATAA' in promoter.upper() or 'TATATAT' in promoter.upper():
 			tata_status = "TATA box found!"
@@ -686,20 +691,25 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			if (hard_cutoff - tss) > max_promoter_size:
 				promoter = seq_per_contig[ tss:tss+max_promoter_size ]
 				promoter_status = True
+				downstream_to_tss = seq_per_contig[ tss-max_promoter_size:tss ]
 			else:
 				promoter = seq_per_contig[ tss:hard_cutoff ]
 				promoter_status = True
+				down = hard_cutoff - tss
+				downstream_to_tss = seq_per_contig[tss - down: tss ]
 		else:
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ gene_end:hard_cutoff ]
 			promoter_status = False
+			down = hard_cutoff - gene_end
+			downstream_to_tss = seq_per_contig[gene_end-down:gene_end]
 		"""
 		if 'TTTTATA' in promoter.upper() or 'ATTTATA' in promoter.upper() or 'TTATATA' in promoter.upper() or 'ATATATA' in promoter.upper():#searching for reverse complements of TATA consensus sequences in the reverse strand genes
 			tata_status = "TATA box found!"
 		else:
 			tata_status = 'No TATA box detected ...'
 		"""
-	return promoter_status, promoter
+	return promoter_status, promoter, downstream_to_tss
 
 #function to sort sequences from MOODS results on the basis of strandedness and proximity to TSS
 def sort_key(row, orientation):
@@ -715,17 +725,26 @@ def sort_key(row, orientation):
 		return(priority, position)
 
 #function to scan extracted promoter sequences for TATA binding motifs
-def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
+def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
 	motif_plot = os.path.join(output_folder,f'{gene}_motif_hits.png')
+	tss_neighbourhood = os.path.join(output_folder,f'{gene}_tss_neighbourhood.png')
 	tss = result['TSS']
 	promoter_length = len(promoter_seq)
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
+	tmp2=tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
 	try:
 		tmp.write(f">{gene}\n{promoter_seq}\n")
 		tmp.flush()
 		tmp.close()
+		tmp2.write(f">{gene}\n{downstream_to_tss}\n")
+		tmp2.flush()
+		tmp2.close()
 		moods_output_file = os.path.join(tmp_folder,f"{gene}_moods.txt")
 		cmd = 'python3 ' + moods + ' -m ' + pfm_folder+'/*.pfm ' + '-s ' + tmp.name + ' -p ' + str(pvalue) + ' -o ' + moods_output_file
+		p = subprocess.Popen(args=cmd, shell=True)
+		p.communicate()
+		moods_downstream_region_output_file = os.path.join(tmp_folder,f"{gene}_moods_downstream_to_tss.txt")
+		cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + tmp2.name + ' -p ' + str(pvalue) + ' -o ' + moods_downstream_region_output_file
 		p = subprocess.Popen(args=cmd, shell=True)
 		p.communicate()
 		rows = []
@@ -736,16 +755,34 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 				rows.append(row)
 				line=f.readline()
 		sorted_rows = sorted(rows,key=lambda row:sort_key(row,orientation))
+		drows = []#drows means rows of downstreamt to tss region MOODS file
+		with open (moods_downstream_region_output_file, 'r') as f:
+			line = f.readline()
+			while line:
+				row = line.strip().rstrip(',').split(',')
+				drows.append(row)
+				line=f.readline()
+		sorted_drows = sorted(drows,key=lambda row:sort_key(row,orientation))
 		#collecting position-sign dictionary elements for motif density plot making
-		pos_strand={}
+		pos_strand = defaultdict(list)# defaultdict method is used here to account for cases where + and - hits occur at the same genomic position in which since genomic position is the key, it will be overwritten to retain just the last entry
 		for hit in sorted_rows:
 			if orientation == '+':
-				plot_pos = tss - (int(hit[2]))
-				pos_strand[plot_pos]=hit[3]
+				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
+				pos_strand[plot_pos].append(hit[3])
 			elif orientation == '-':
 				plot_pos = tss + (int(hit[2]))
-				pos_strand[plot_pos] = hit[3]
+				pos_strand[plot_pos].append(hit[3])
 
+		# collecting position-sign dictionary elements for motif density plot making in the TSS neighbourhood upstream and downstream
+		down_pos_strand=defaultdict(list)
+		for hit in sorted_drows:
+			if orientation == '+':
+				plot_pos = tss + (int(hit[2]))
+				down_pos_strand[plot_pos].append(hit[3])
+			elif orientation == '-':
+				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
+				down_pos_strand[plot_pos].append(hit[3])
+		moods_strands = pos_strand | down_pos_strand
 		best_motif_hits=sorted_rows[:(top_motifs)]
 		motif_closeness = None
 		for hit in best_motif_hits:
@@ -755,7 +792,7 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 					motif_closeness = 'proximal motif'
 				else:
 					motif_closeness = 'distal motif'
-				actual_motif_pos = tss - (int(hit[2]))
+				actual_motif_pos = tss - (len(promoter_seq) - pos)
 				hit[2]= str(actual_motif_pos)
 			elif orientation=='-':
 				pos=int(hit[2])
@@ -772,11 +809,13 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 
 		fixed_heights = [0.4, 0.6, 0.8, 1.0]  # fixed height levels since no histogram to scale to
 
-		for i, (pos, sign) in enumerate(pos_strand.items()):
-			colour = 'green' if sign == orientation else 'red'
+		for i, (pos, signs) in enumerate(pos_strand.items()):
 			h = fixed_heights[i % len(fixed_heights)]
-			ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
-			ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
+			for j, sign in enumerate(signs):
+				colour = 'green' if sign == orientation else 'red'
+				h = fixed_heights[(i + j) % len(fixed_heights)]
+				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
+				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
 		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2, zorder=3)
 		ax.set_yticks([])  # no y-axis needed
 		ax.set_xlabel('Genomic position')
@@ -792,10 +831,37 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, moods, pva
 		ax.legend(handles=legend_elements, loc='best')
 		plt.tight_layout()
 		plt.savefig(motif_plot, dpi=600)
+		#lollipop plot of up and downstream regions of predicted TSS
+		for i, (pos, signs) in enumerate(moods_strands.items()):
+			h = fixed_heights[i % len(fixed_heights)]
+			for j, sign in enumerate(signs):
+				colour = 'green' if sign == orientation else 'red'
+				h = fixed_heights[(i + j) % len(fixed_heights)]
+				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
+				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
+		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2, zorder=3)
+		ax.set_yticks([])  # no y-axis needed
+		ax.set_xlabel('Genomic position')
+		ax.axhline(0, color='black', linewidth=0.5)  # baseline
+		ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
+		ax.ticklabel_format(style='plain', axis='x')
+		plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+		legend_elements = [
+			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
+			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='TATA motif (same orientation)'),
+			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='TATA motif (reverse orientation)')
+		]
+		ax.legend(handles=legend_elements, loc='best')
+		plt.tight_layout()
+		plt.savefig(tss_neighbourhood, dpi=600)
+		plt.close()
+
 
 	finally:
 		if os.path.exists(tmp.name):
 			os.remove(tmp.name)
+		if os.path.exists(tmp2.name):
+			os.remove(tmp2.name)
 	return best_motif_hits
 
 def main( arguments ):
@@ -1261,10 +1327,10 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
+						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
 						motifs.append(best_motif_hits)
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
@@ -1278,10 +1344,10 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
+						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
 						motifs.append(best_motif_hits)
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
