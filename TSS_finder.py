@@ -899,9 +899,7 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 		plt.tight_layout()
 		plt.savefig(tss_neighbourhood, dpi=600)
 		plt.close()
-		if gene == 'AT3G53260':
-			print(f'upstream_motif_score: {upstream_motif_score}')
-			print(f'downstream_motif_score: {downstream_motif_score}')
+
 		if upstream_motif_score > downstream_motif_score:
 			tss_confidence = 'High confidence'
 		elif upstream_motif_score == downstream_motif_score and upstream_motif_score != 0:
@@ -1277,7 +1275,7 @@ def main( arguments ):
 						if f.endswith('bam'):
 							out.write(f + '\n')
 				merged_bam=os.path.join(output_folder,'merged.bam')
-				cmd = samtools+' merge -o '+merged_bam+' -b '+bam_files
+				cmd = samtools + ' --threads ' + t + ' merge -o ' + merged_bam + ' -b ' + bam_files
 				p = subprocess.Popen(args=cmd, shell=True)
 				p.communicate()
 				# Check if merge was successful
@@ -1385,8 +1383,6 @@ def main( arguments ):
 						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
 						motifs.append(best_motif_hits)
 						tss_confidence_dic[gene] = tss_confidence
-						if gene == 'AT5G13930':
-							print(tss_confidence_dic[gene])
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
