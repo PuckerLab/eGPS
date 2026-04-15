@@ -225,12 +225,18 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 		if orientation == '+':
 			dx = feature_length
 			x_origin = mrna_start
+			xdot_origin = tss_pos
+			predicted_tss_mrna_feature = mrna_end - tss_pos
 		elif orientation == '-':
 			dx = -feature_length
 			x_origin = mrna_end
+			xdot_origin = tss_pos
+			predicted_tss_mrna_feature = -(tss_pos - mrna_start)
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
 		arrow = FancyArrow(x=x_origin, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='steelblue', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
+		dotted_arrow = FancyArrow(x=xdot_origin, y=0.2, dx=predicted_tss_mrna_feature, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='none', alpha=0.5, edgecolor='steelblue', linewidth=0.5, linestyle='dotted')
+		ax_features.add_patch(dotted_arrow)
 	for cds_start, cds_end in cds_to_plot:
 		feature_length = cds_end - cds_start
 		if orientation == '+':
@@ -247,12 +253,18 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 		if orientation == '+':
 			dx = feature_length
 			x_origin = five_utr_start
+			xdot_origin = tss_pos
+			predicted_tss_five_utr_feature = five_utr_end - tss_pos
 		elif orientation == '-':
 			dx = -feature_length
 			x_origin = five_utr_end
+			xdot_origin = tss_pos
+			predicted_tss_five_utr_feature = -(tss_pos - five_utr_start)
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
 		arrow = FancyArrow(x=x_origin, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='salmon', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
+		dotted_arrow = FancyArrow(x=xdot_origin, y=0.8, dx=predicted_tss_five_utr_feature, dy=0, width=0.2, head_width=0.3,head_length=20, length_includes_head=True, facecolor='none', alpha=0.5,edgecolor='salmon', linewidth=0.5, linestyle='dotted')
+		ax_features.add_patch(dotted_arrow)
 
 	# extend vertical lines into feature axis
 	ax_features.axvline(atg_pos, color="green", linestyle="dotted")
@@ -412,8 +424,6 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
 			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
-			print("current position is " + str( current_position ) )
-			print ("most upstream position is " + str( most_upstream_pos ) )
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
 				print( "donor splice site: " + donor_splice_site )
 				print( "acceptor splice site: " + acceptor_splice_site )
@@ -765,23 +775,57 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 		sorted_drows = sorted(drows,key=lambda row:sort_key(row,orientation))
 		#collecting position-sign dictionary elements for motif density plot making
 		pos_strand = defaultdict(list)# defaultdict method is used here to account for cases where + and - hits occur at the same genomic position in which since genomic position is the key, it will be overwritten to retain just the last entry
+		upstream_motif_score = 0
 		for hit in sorted_rows:
 			if orientation == '+':
 				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
 				pos_strand[plot_pos].append(hit[3])
+				if hit[3] == orientation and ((len(promoter_seq) - int(hit[2])) <= tss_prox):
+					upstream_motif_score += 1
+				elif hit[3] == orientation and ((len(promoter_seq) - int(hit[2])) > tss_prox):
+					upstream_motif_score += 0.5
+				if hit[3] != orientation and ((len(promoter_seq) - int(hit[2])) <= tss_prox):
+					upstream_motif_score += -0.25
+				elif hit[3] != orientation and ((len(promoter_seq) - int(hit[2])) > tss_prox):
+					upstream_motif_score += -0.5
 			elif orientation == '-':
 				plot_pos = tss + (int(hit[2]))
 				pos_strand[plot_pos].append(hit[3])
+				if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
+					upstream_motif_score += 1
+				elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
+					upstream_motif_score += 0.5
+				if hit[3] != orientation and ((int(hit[2])) <= tss_prox):
+					upstream_motif_score += -0.25
+				elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
+					upstream_motif_score += -0.5
 
 		# collecting position-sign dictionary elements for motif density plot making in the TSS neighbourhood upstream and downstream
 		down_pos_strand=defaultdict(list)
+		downstream_motif_score = 0
 		for hit in sorted_drows:
 			if orientation == '+':
 				plot_pos = tss + (int(hit[2]))
 				down_pos_strand[plot_pos].append(hit[3])
+				if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
+					downstream_motif_score += 1
+				elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
+					downstream_motif_score += 0.5
+				elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):
+					downstream_motif_score += -0.25
+				elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
+					downstream_motif_score += -0.5
 			elif orientation == '-':
 				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
 				down_pos_strand[plot_pos].append(hit[3])
+				if hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
+					downstream_motif_score += 1
+				elif hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
+					downstream_motif_score += 0.5
+				elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
+					downstream_motif_score += -0.25
+				elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
+					downstream_motif_score += -0.5
 		moods_strands = pos_strand | down_pos_strand
 		best_motif_hits=sorted_rows[:(top_motifs)]
 		motif_closeness = None
@@ -855,14 +899,22 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 		plt.tight_layout()
 		plt.savefig(tss_neighbourhood, dpi=600)
 		plt.close()
-
+		if gene == 'AT3G53260':
+			print(f'upstream_motif_score: {upstream_motif_score}')
+			print(f'downstream_motif_score: {downstream_motif_score}')
+		if upstream_motif_score > downstream_motif_score:
+			tss_confidence = 'High confidence'
+		elif upstream_motif_score == downstream_motif_score and upstream_motif_score != 0:
+			tss_confidence = 'Moderate confidence'
+		elif upstream_motif_score < downstream_motif_score or upstream_motif_score == 0:
+			tss_confidence = 'Low confidence'
 
 	finally:
 		if os.path.exists(tmp.name):
 			os.remove(tmp.name)
 		if os.path.exists(tmp2.name):
 			os.remove(tmp2.name)
-	return best_motif_hits
+	return best_motif_hits, tss_confidence
 
 def main( arguments ):
 	"""! @brief run everything """
@@ -1256,6 +1308,7 @@ def main( arguments ):
 	results = {}
 	motifs = []
 	#confidence_score_dic = {}
+	tss_confidence_dic = {}
 	isoforms_dic = {}
 	distance_dic = {}
 	coverage_dic = {}
@@ -1318,7 +1371,6 @@ def main( arguments ):
 			if blocking_overlaps > 0:
 				print(f"{gene} has {blocking_overlaps} overlap(s). TSS analysis skipped.")
 				continue
-
 			if orientation == "+":	#only works on forward strand
 				fig_file = output_folder + gene + ".png"
 				if upstream_gene:
@@ -1330,8 +1382,11 @@ def main( arguments ):
 				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
+						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
 						motifs.append(best_motif_hits)
+						tss_confidence_dic[gene] = tss_confidence
+						if gene == 'AT5G13930':
+							print(tss_confidence_dic[gene])
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
@@ -1347,8 +1402,9 @@ def main( arguments ):
 				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
+						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
 						motifs.append(best_motif_hits)
+						tss_confidence_dic[gene] = tss_confidence
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
@@ -1379,18 +1435,35 @@ def main( arguments ):
 	final_output_file = output_folder + "Results.tsv"
 	promoter_motif_output_file = os.path.join(output_folder,'Top_promoter_motifs.tsv')
 	with open( final_output_file, "w" ) as out:
-		out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
-		for gene in list( results.keys() ):
-			out.write( "\t".join( [ 	gene,
-												str( results[ gene ]['TSS'] ),
-												str(coverage_dic[gene]),
-												str(isoforms_dic[gene]),
-												str( results[ gene ]['start'] ),
-												str( results[ gene ]['end'] ),
-												str( results[ gene ]['promoter_status'] ),
-												str( results[ gene ]['promoter'] ),
-												str(five_utr_dic[gene])
-										] ) + "\n" )
+		if promoter_analysis != 'yes':
+			out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
+			for gene in list( results.keys() ):
+				out.write( "\t".join( [ 	gene,
+													str( results[ gene ]['TSS'] ),
+													str(coverage_dic[gene]),
+													str(isoforms_dic[gene]),
+													str( results[ gene ]['start'] ),
+													str( results[ gene ]['end'] ),
+													str( results[ gene ]['promoter_status'] ),
+													str( results[ gene ]['promoter'] ),
+													str(five_utr_dic[gene])
+											] ) + "\n" )
+		elif promoter_analysis == 'yes':
+			out.write( "\t".join( [ "GeneID", "TSS", "TSS confidence", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
+			for gene in list( results.keys() ):
+				if gene in results and gene in tss_confidence_dic:
+					out.write( "\t".join( [ 	gene,
+														str( results[ gene ]['TSS'] ),
+														str(tss_confidence_dic[gene]),
+														str(coverage_dic[gene]),
+														str(isoforms_dic[gene]),
+														str( results[ gene ]['start'] ),
+														str( results[ gene ]['end'] ),
+														str( results[ gene ]['promoter_status'] ),
+														str( results[ gene ]['promoter'] ),
+														str(five_utr_dic[gene])
+												] ) + "\n" )
+
 	# --- write top promoter motif hits in a separate output file --- #
 	if promoter_analysis == 'yes':
 		if motifs:
