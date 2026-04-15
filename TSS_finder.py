@@ -1208,7 +1208,7 @@ def main( arguments ):
 		os.mkdir(star_indexing_folder)
 		if aligner == 'STAR':
 			# Indexing with STAR
-			cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+index_bases
+			cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+str(index_bases)
 			p = subprocess.Popen(args=cmd, shell=True)
 			p.communicate()
 		elif aligner == 'HISAT2':
@@ -1254,7 +1254,7 @@ def main( arguments ):
 					if aligner == 'STAR':
 						#RNAseq mapping with STAR
 						prefix=os.path.join(star_mapping_folder,sample+'_')
-						cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+intron_cutoff
+						cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+ str(intron_cutoff)
 						p = subprocess.Popen(args=cmd, shell=True)
 						p.communicate()
 					elif aligner == 'HISAT2':
