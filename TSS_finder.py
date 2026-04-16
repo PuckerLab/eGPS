@@ -1275,7 +1275,7 @@ def main( arguments ):
 						if f.endswith('bam'):
 							out.write(f + '\n')
 				merged_bam=os.path.join(output_folder,'merged.bam')
-				cmd = samtools + ' --threads ' + t + ' merge -o ' + merged_bam + ' -b ' + bam_files
+				cmd = samtools + ' merge --threads '+ t + ' -o ' + merged_bam + ' -b ' + bam_files
 				p = subprocess.Popen(args=cmd, shell=True)
 				p.communicate()
 				# Check if merge was successful
