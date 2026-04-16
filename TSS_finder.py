@@ -667,7 +667,7 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	return just_up_gene, just_down_gene, up_genes, down_genes
 	
 
-def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size ):
+def extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size ):
 	"""! @brief extract promoter region """
 	
 	tss = result['TSS']
@@ -678,18 +678,22 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			if (tss - hard_cutoff) > max_promoter_size:
 				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
 				promoter_status = True
-				downstream_to_tss = seq_per_contig[ tss:tss+max_promoter_size ]
 			else:
 				promoter = seq_per_contig[ hard_cutoff:tss ]
 				promoter_status = True
-				down = tss - hard_cutoff
-				downstream_to_tss = seq_per_contig[tss:tss + down]
 		else:
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
-			down = gene_start - hard_cutoff
-			downstream_to_tss = seq_per_contig[gene_start:gene_start+down]
+		# retrieving downstream sequence
+		if (start - tss) > min_promoter_size:
+			if (start - tss) > max_promoter_size:
+				downstream_to_tss = seq_per_contig[tss:tss + max_promoter_size]
+			else:
+				down = start - tss
+				downstream_to_tss = seq_per_contig[tss:tss+down]
+		else:
+			downstream_to_tss = ''
 		"""
 		if 'TATAAAA' in promoter.upper() or 'TATAAAT' in promoter.upper() or 'TATATAA' in promoter.upper() or 'TATATAT' in promoter.upper():
 			tata_status = "TATA box found!"
@@ -701,18 +705,22 @@ def extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, m
 			if (hard_cutoff - tss) > max_promoter_size:
 				promoter = seq_per_contig[ tss:tss+max_promoter_size ]
 				promoter_status = True
-				downstream_to_tss = seq_per_contig[ tss-max_promoter_size:tss ]
 			else:
 				promoter = seq_per_contig[ tss:hard_cutoff ]
 				promoter_status = True
-				down = hard_cutoff - tss
-				downstream_to_tss = seq_per_contig[tss - down: tss ]
 		else:
 			#no promoter detected (returning everything upstream of start codon
 			promoter = seq_per_contig[ gene_end:hard_cutoff ]
 			promoter_status = False
-			down = hard_cutoff - gene_end
-			downstream_to_tss = seq_per_contig[gene_end-down:gene_end]
+		# retrieving downstream sequence
+		if (tss - end) > min_promoter_size:
+			if (tss -end) > max_promoter_size:
+				down = tss - max_promoter_size
+				downstream_to_tss = seq_per_contig[tss - max_promoter_size:tss]
+			else:
+				downstream_to_tss = seq_per_contig[tss - end : tss]
+		else:
+			downstream_to_tss = ''
 		"""
 		if 'TTTTATA' in promoter.upper() or 'ATTTATA' in promoter.upper() or 'TTATATA' in promoter.upper() or 'ATATATA' in promoter.upper():#searching for reverse complements of TATA consensus sequences in the reverse strand genes
 			tata_status = "TATA box found!"
@@ -746,17 +754,20 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 		tmp.write(f">{gene}\n{promoter_seq}\n")
 		tmp.flush()
 		tmp.close()
-		tmp2.write(f">{gene}\n{downstream_to_tss}\n")
-		tmp2.flush()
-		tmp2.close()
+		if downstream_to_tss:
+			tmp2.write(f">{gene}\n{downstream_to_tss}\n")
+			tmp2.flush()
+			tmp2.close()
+			moods_downstream_region_output_file = os.path.join(tmp_folder, f"{gene}_moods_downstream_to_tss.txt")
+			cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + tmp2.name + ' -p ' + str(
+				pvalue) + ' -o ' + moods_downstream_region_output_file
+			p = subprocess.Popen(args=cmd, shell=True)
+			p.communicate()
 		moods_output_file = os.path.join(tmp_folder,f"{gene}_moods.txt")
 		cmd = 'python3 ' + moods + ' -m ' + pfm_folder+'/*.pfm ' + '-s ' + tmp.name + ' -p ' + str(pvalue) + ' -o ' + moods_output_file
 		p = subprocess.Popen(args=cmd, shell=True)
 		p.communicate()
-		moods_downstream_region_output_file = os.path.join(tmp_folder,f"{gene}_moods_downstream_to_tss.txt")
-		cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + tmp2.name + ' -p ' + str(pvalue) + ' -o ' + moods_downstream_region_output_file
-		p = subprocess.Popen(args=cmd, shell=True)
-		p.communicate()
+
 		rows = []
 		with open (moods_output_file, 'r') as f:
 			line = f.readline()
@@ -765,14 +776,17 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 				rows.append(row)
 				line=f.readline()
 		sorted_rows = sorted(rows,key=lambda row:sort_key(row,orientation))
-		drows = []#drows means rows of downstreamt to tss region MOODS file
-		with open (moods_downstream_region_output_file, 'r') as f:
-			line = f.readline()
-			while line:
-				row = line.strip().rstrip(',').split(',')
-				drows.append(row)
-				line=f.readline()
-		sorted_drows = sorted(drows,key=lambda row:sort_key(row,orientation))
+		drows = []#drows means rows of downstream to tss region MOODS file
+		if os.path.exists(moods_downstream_region_output_file):
+			with open (moods_downstream_region_output_file, 'r') as f:
+				line = f.readline()
+				while line:
+					row = line.strip().rstrip(',').split(',')
+					drows.append(row)
+					line=f.readline()
+			sorted_drows = sorted(drows,key=lambda row:sort_key(row,orientation))
+		else:
+			sorted_drows = []
 		#collecting position-sign dictionary elements for motif density plot making
 		pos_strand = defaultdict(list)# defaultdict method is used here to account for cases where + and - hits occur at the same genomic position in which since genomic position is the key, it will be overwritten to retain just the last entry
 		upstream_motif_score = 0
@@ -802,31 +816,36 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 
 		# collecting position-sign dictionary elements for motif density plot making in the TSS neighbourhood upstream and downstream
 		down_pos_strand=defaultdict(list)
-		downstream_motif_score = 0
-		for hit in sorted_drows:
-			if orientation == '+':
-				plot_pos = tss + (int(hit[2]))
-				down_pos_strand[plot_pos].append(hit[3])
-				if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
-					downstream_motif_score += 1
-				elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
-					downstream_motif_score += 0.5
-				elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):
-					downstream_motif_score += -0.25
-				elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
-					downstream_motif_score += -0.5
-			elif orientation == '-':
-				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
-				down_pos_strand[plot_pos].append(hit[3])
-				if hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
-					downstream_motif_score += 1
-				elif hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
-					downstream_motif_score += 0.5
-				elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
-					downstream_motif_score += -0.25
-				elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
-					downstream_motif_score += -0.5
-		moods_strands = pos_strand | down_pos_strand
+		if sorted_drows:
+			downstream_motif_score = 0
+			for hit in sorted_drows:
+				if orientation == '+':
+					plot_pos = tss + (int(hit[2]))
+					down_pos_strand[plot_pos].append(hit[3])
+					if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
+						downstream_motif_score += 1
+					elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
+						downstream_motif_score += 0.5
+					elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):
+						downstream_motif_score += -0.25
+					elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
+						downstream_motif_score += -0.5
+				elif orientation == '-':
+					plot_pos = tss - (len(promoter_seq) - int(hit[2]))
+					down_pos_strand[plot_pos].append(hit[3])
+					if hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
+						downstream_motif_score += 1
+					elif hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
+						downstream_motif_score += 0.5
+					elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
+						downstream_motif_score += -0.25
+					elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
+						downstream_motif_score += -0.5
+
+		if down_pos_strand:
+			moods_strands = pos_strand | down_pos_strand
+		else:
+			moods_strands = pos_strand
 		best_motif_hits=sorted_rows[:(top_motifs)]
 		motif_closeness = None
 		for hit in best_motif_hits:
@@ -900,12 +919,15 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 		plt.savefig(tss_neighbourhood, dpi=600)
 		plt.close()
 
-		if upstream_motif_score > downstream_motif_score:
+		if down_pos_strand:
+			if upstream_motif_score > downstream_motif_score:
+				tss_confidence = 'High confidence'
+			elif upstream_motif_score == downstream_motif_score and upstream_motif_score != 0:
+				tss_confidence = 'Moderate confidence'
+			elif upstream_motif_score < downstream_motif_score or upstream_motif_score == 0:
+				tss_confidence = 'Low confidence'
+		else:
 			tss_confidence = 'High confidence'
-		elif upstream_motif_score == downstream_motif_score and upstream_motif_score != 0:
-			tss_confidence = 'Moderate confidence'
-		elif upstream_motif_score < downstream_motif_score or upstream_motif_score == 0:
-			tss_confidence = 'Low confidence'
 
 	finally:
 		if os.path.exists(tmp.name):
@@ -1377,7 +1399,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss = extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
 						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
@@ -1395,7 +1417,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter, downstream_to_tss = extract_promoter_region( result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss = extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
 						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
