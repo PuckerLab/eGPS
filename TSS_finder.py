@@ -822,13 +822,13 @@ def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream
 				if orientation == '+':
 					plot_pos = tss + (int(hit[2]))
 					down_pos_strand[plot_pos].append(hit[3])
-					if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
+					if hit[3] == orientation and ((int(hit[2])) <= tss_prox):#proximal same orientation motif
 						downstream_motif_score += 1
-					elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
+					elif hit[3] == orientation and ((int(hit[2])) > tss_prox):#distal same orientation motif
 						downstream_motif_score += 0.5
-					elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):
+					elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):#proximal different orientation motif
 						downstream_motif_score += -0.25
-					elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
+					elif hit[3] != orientation and ((int(hit[2])) > tss_prox):#distal different orientation motif
 						downstream_motif_score += -0.5
 				elif orientation == '-':
 					plot_pos = tss - (len(promoter_seq) - int(hit[2]))
