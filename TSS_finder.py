@@ -30,9 +30,12 @@ __usage__ = """
 
 
 import re, os, sys, subprocess, gzip
+import random
+import math
 import tempfile
 import traceback
 import numpy as np
+from scipy.stats import percentileofscore
 from decimal import Decimal, ROUND_HALF_DOWN
 from collections import defaultdict
 try:
@@ -178,7 +181,7 @@ def load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attr
 
 def load_sequences( fasta_file ):
 	"""! @brief load candidate gene IDs from file """
-	
+	seq_counter = 1
 	sequences = {}
 	with open( fasta_file ) as f:
 		header = f.readline()[1:].strip()
@@ -188,17 +191,169 @@ def load_sequences( fasta_file ):
 		line = f.readline()
 		while line:
 			if line[0] == '>':
-					sequences.update( { header: "".join( seq ) } )
-					header = line.strip()[1:]
-					if " " in header:
-						header = header.split(' ')[0]
-					seq = []
+				seq_counter+=1
+				sequences.update( { header: "".join( seq ) } )
+				header = line.strip()[1:]
+				if " " in header:
+					header = header.split(' ')[0]
+				seq = []
 			else:
 				seq.append( line.strip() )
 			line = f.readline()
-		sequences.update( { header: "".join( seq ) } )	
-	return sequences
+		sequences.update( { header: "".join( seq ) } )
+	return sequences, seq_counter
 
+def get_gene_orientation_for_transcript(transcripts_per_gene,gene_infos, genome_seq):
+	transcript_orientation_dic = {}
+	transcript_contig_dic = {}
+	for gene, transcript_list in transcripts_per_gene.items():
+		transcript_orientation = gene_infos[gene]['orientation']
+		transcript_containing_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]
+		for transcript_id in transcript_list:
+			transcript_orientation_dic[transcript_id] = transcript_orientation
+			transcript_contig_dic[transcript_id] = transcript_containing_contig
+	return transcript_orientation_dic, transcript_contig_dic
+
+def get_background_seqs (promoter_slice, downstream_slice, cds_infos, fraclen, max_promoter_size, gff_file, downstream_size,genome_seq, gene_infos, transcripts_per_gene, child_parent_linker, background_strength):
+	seen_introns = set()
+	seen_cds = set()
+	background_positive_strand_seqs =[]
+	background_negative_strand_seqs = []
+	background_positive_strand_cds_seqs = []
+	background_negative_strand_cds_seqs = []
+	trans_exon_map = {}
+	transcript_orientation_dic, transcript_contig_dic, transcript_index_dic = get_gene_orientation_for_transcript(transcripts_per_gene, gene_infos, genome_seq)
+	with open(gff_file, 'r') as f:
+		for line in f:
+			if not line.startswith('#'):
+				parts = line.strip().split('\t')
+				if parts[2].lower() == 'exon':
+					fields = parts[8].strip().split(';')
+					for each in fields:
+						if f'{child_parent_linker}=' in each:
+							parents = each.replace(f'{child_parent_linker}=', '').split(',')
+							for transcript in parents:
+								if parents.index(transcript) == 0:
+									transcript = transcript.strip()
+									start = int(parts[3])
+									end = int(parts[4])
+									if transcript not in trans_exon_map:
+										trans_exon_map[transcript] = [(start, end)]
+									else:
+										trans_exon_map[transcript].append((start, end))
+
+	max_bg_len = promoter_slice + downstream_slice
+	cds_coords = []
+	# calculate intron sizes
+	for transcript in trans_exon_map.keys():
+		if transcript in transcript_orientation_dic:
+			orientation = transcript_orientation_dic[transcript]
+			seq = transcript_contig_dic[transcript]
+			exons = trans_exon_map[transcript]
+			if len(exons) < 2:
+				continue
+			counter = 0
+			if transcript in cds_infos:
+				cds_coords= cds_infos[transcript]
+			if orientation == '+':
+				# sort by ascending order of start coordinates
+				exons.sort(key=lambda x: x[0])
+				while counter <= (len(exons) - 2):
+					intron_start = exons[counter][1]  # end of current exon
+					intron_end = exons[counter + 1][0]  # start of next exon
+					intron_key = (intron_start, intron_end)
+					if intron_key in seen_introns:
+						counter += 1
+						continue
+					seen_introns.add(intron_key)
+					intron_seq = seq[intron_start:intron_end]
+					if len(intron_seq) <= 0:
+						pass
+					else:
+						if len(intron_seq) >= max_bg_len:
+							# intron alone is long enough — truncate and use directly
+							background_seq = intron_seq[:max_bg_len]
+							if len(background_positive_strand_seqs) < background_strength:
+									background_positive_strand_seqs.append(background_seq)
+					counter += 1
+				#collecting cds background seqs
+				if transcript_index_dic[transcript] != 0:  # ensuring that the cds of the most upstream transcript is not taken for the background since it might have the TSS
+					if cds_coords:
+						cds_coords.sort(key=lambda x: x[0]) # sort by ascending order of start coordinates
+						for each in cds_coords:
+							if cds_coords.index(each) == 0: #avoid taking the most upstream CDS
+								pass
+							else:
+								cds_start = each[0]
+								cds_end = each[1]
+								cds_seq = seq[cds_start:cds_end]
+								if len(cds_seq) >= max_bg_len:
+									background_seq = cds_seq[:max_bg_len]
+									if len(background_positive_strand_cds_seqs) < background_strength:
+										background_positive_strand_cds_seqs.append(background_seq)
+
+			elif orientation == '-':
+				exons.sort(key=lambda x: x[1], reverse=True)  # sort by end descending
+				while counter <= (len(exons) - 2):
+					intron_start = exons[counter + 1][1]   # end of downstream exon
+					intron_end = exons[counter][0]          # start of upstream exon
+					intron_key = (intron_start, intron_end)
+					if intron_key in seen_introns:
+						counter += 1
+						continue
+					seen_introns.add(intron_key)
+					intron_seq = seq[intron_start:intron_end]
+					if len(intron_seq) <= 0:
+						pass
+					else:
+						if len(intron_seq) >= max_bg_len:
+							# intron alone is long enough — truncate and use directly
+							background_seq = intron_seq[-max_bg_len:]
+							if len(background_negative_strand_seqs) < background_strength:
+								background_negative_strand_seqs.append(background_seq)
+					counter += 1
+				# collecting cds background seqs
+				if transcript_index_dic[transcript] != -1:  # ensuring that the cds of the most upstream transcript is not taken for the background since it might have the TSS
+					if cds_coords:
+						cds_coords.sort(key=lambda x: x[0])  # sort by ascending order of start coordinates
+						for each in cds_coords:
+							if cds_coords.index(each) == -1:  # avoid taking the most upstream CDS
+								pass
+							else:
+								cds_start = each[0]
+								cds_end = each[1]
+								cds_seq = seq[cds_start:cds_end]
+								if len(cds_seq) >= max_bg_len:
+									background_seq = cds_seq[:max_bg_len]
+									if len(background_negative_strand_cds_seqs) < background_strength:
+										background_negative_strand_cds_seqs.append(background_seq)
+
+	return background_positive_strand_seqs, background_positive_strand_cds_seqs, background_negative_strand_seqs, background_negative_strand_cds_seqs
+
+#function to randomly subsample a fragment of defined length from a given contig
+def get_random_fragment(contig, seq_len):
+	start = random.randint(0,(len(contig) - seq_len))
+	random_seq = contig[start:start+seq_len]
+	return random_seq
+#function to get random background seqs from the genome
+def get_random_background_seqs (genome_seq, contig_counter,seq_len, background_strength):
+	contig_len_list = []
+	for contig in genome_seq:
+		contig_len_list.append((contig,len(contig)))
+	#sorting the contigs in descending order of their lengths so that longer contigs contribute to the random background seqs in case the background cap is reached before the contribution from each contig is included
+	sorted_contig_len_list = sorted(contig_len_list, key=lambda x: x[1], reverse=True)
+	background = []
+	seqs_to_sample_per_contig = math.ceil(background_strength/contig_counter)
+	for contig in genome_seq:
+		if len(genome_seq[contig]) > seq_len:
+			seqs_per_contig = 0
+			while seqs_per_contig < seqs_to_sample_per_contig:
+				if len(background) >= background_strength:
+					break
+				random_seq = get_random_fragment(genome_seq[contig], seq_len)
+				background.append(random_seq)
+				seqs_per_contig +=1
+	return background
 
 def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
 	"""! @brief generate a coverage plot """
@@ -667,13 +822,13 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	return just_up_gene, just_down_gene, up_genes, down_genes
 	
 
-def extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size ):
+def extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size ):
 	"""! @brief extract promoter region """
 	
 	tss = result['TSS']
 	gene_start = result['start']
 	gene_end = result['end']
-	if orientation == "+":	#forward strand	
+	if orientation == "+":	#forward strand
 		if (tss - hard_cutoff) > min_promoter_size:
 			if (tss - hard_cutoff) > max_promoter_size:
 				promoter = seq_per_contig[ tss-max_promoter_size:tss ]
@@ -686,20 +841,9 @@ def extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_p
 			promoter = seq_per_contig[ hard_cutoff:gene_start ]
 			promoter_status = False
 		# retrieving downstream sequence
-		if (start - tss) > min_promoter_size:
-			if (start - tss) > max_promoter_size:
-				downstream_to_tss = seq_per_contig[tss:tss + max_promoter_size]
-			else:
-				down = start - tss
-				downstream_to_tss = seq_per_contig[tss:tss+down]
-		else:
-			downstream_to_tss = ''
-		"""
-		if 'TATAAAA' in promoter.upper() or 'TATAAAT' in promoter.upper() or 'TATATAA' in promoter.upper() or 'TATATAT' in promoter.upper():
-			tata_status = "TATA box found!"
-		else:
-			tata_status = 'No TATA box detected ...'
-		"""
+		downstream_to_tss = seq_per_contig[tss:tss + downstream_size]
+		#retrieving a sequence of fixed length (250 bp around the TSS with 200 bp upstream and 50 bp downstream)
+		full_seq = promoter[-(upstream_slice):] + downstream_to_tss[:downstream_slice]
 	else:	#reverse strand
 		if (hard_cutoff - tss) > min_promoter_size:
 			if (hard_cutoff - tss) > max_promoter_size:
@@ -713,21 +857,10 @@ def extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_p
 			promoter = seq_per_contig[ gene_end:hard_cutoff ]
 			promoter_status = False
 		# retrieving downstream sequence
-		if (tss - end) > min_promoter_size:
-			if (tss -end) > max_promoter_size:
-				down = tss - max_promoter_size
-				downstream_to_tss = seq_per_contig[tss - max_promoter_size:tss]
-			else:
-				downstream_to_tss = seq_per_contig[tss - end : tss]
-		else:
-			downstream_to_tss = ''
-		"""
-		if 'TTTTATA' in promoter.upper() or 'ATTTATA' in promoter.upper() or 'TTATATA' in promoter.upper() or 'ATATATA' in promoter.upper():#searching for reverse complements of TATA consensus sequences in the reverse strand genes
-			tata_status = "TATA box found!"
-		else:
-			tata_status = 'No TATA box detected ...'
-		"""
-	return promoter_status, promoter, downstream_to_tss
+		downstream_to_tss = seq_per_contig[tss - downstream_size:tss]
+		# retrieving a sequence of fixed length (250 bp around the TSS with 200 bp upstream and 50 bp downstream)
+		full_seq = downstream_to_tss[-(downstream_slice):] + promoter[:upstream_slice]
+	return promoter_status, promoter, downstream_to_tss, full_seq
 
 #function to sort sequences from MOODS results on the basis of strandedness and proximity to TSS
 def sort_key(row, orientation):
@@ -742,199 +875,187 @@ def sort_key(row, orientation):
 	elif strand == '-':
 		return(priority, position)
 
-#function to scan extracted promoter sequences for TATA binding motifs
-def promoter_motif_analysis (result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder):
-	motif_plot = os.path.join(output_folder,f'{gene}_motif_hits.png')
+def run_moods (sequence, pfm_folder, output_file, moods, pvalue):
+	cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + sequence + ' -p ' + str(pvalue) + ' -o ' + output_file
+	p = subprocess.Popen(args=cmd, shell=True)
+	p.communicate()
+	return output_file
+
+def compute_moods_score(moods_file,seq_len):
+	score = 0
+	rows = []
+	with open(moods_file, 'r') as f:
+		line = f.readline()
+		while line:
+			row = line.strip().rstrip(',').split(',')
+			rows.append(row)
+			line = f.readline()
+	for hit in rows:
+		score += float(hit[4])
+	final_score = score/seq_len
+	return final_score, rows
+
+def compute_background_moods_scores (background_seqs, pfm_config_dic, tmp_folder, output_folder, moods, pvalue):
+	print(f"total no. of background seqs is {len(background_seqs)}")
+	background_scores = []
+	counter = 1
+	for seq in background_seqs:
+		seq_len = len(seq)
+		tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
+		try:
+			tmp.write(f">seq_{counter}\n{seq}\n")
+			tmp.flush()
+			tmp.close()
+			cumulative_promoter_motif_score = 0
+			for elements in pfm_config_dic:
+				pfm_folder = pfm_config_dic[elements][0]
+				output_file = os.path.join(tmp_folder, f"seq_{counter}_moods_{elements}.txt")
+				moods_file = run_moods(tmp.name, pfm_folder, output_file, moods, pvalue)
+				score, sorted_hits = compute_moods_score(moods_file, seq_len)
+				cumulative_promoter_motif_score += score
+			background_scores.append(cumulative_promoter_motif_score)
+		finally:
+			if os.path.exists(tmp.name):
+				os.remove(tmp.name)
+			counter += 1
+	return background_scores
+
+#function to scan extracted promoter sequences for user-specified promoter motif elements
+def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder, output_folder, psig):
 	tss_neighbourhood = os.path.join(output_folder,f'{gene}_tss_neighbourhood.png')
 	tss = result['TSS']
-	promoter_length = len(promoter_seq)
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
-	tmp2=tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
 	try:
-		tmp.write(f">{gene}\n{promoter_seq}\n")
+		if orientation == '+':
+			full_seq = promoter_seq[-(upstream_slice):] + downstream_to_tss[:downstream_slice]
+			promoter_seq = promoter_seq[-(upstream_slice):]
+			downstream_to_tss = downstream_to_tss[:downstream_slice]
+		elif orientation == '-':
+			full_seq = downstream_to_tss[-(downstream_slice):] + promoter_seq[:upstream_slice]
+			promoter_seq = promoter_seq[:upstream_slice]
+			downstream_to_tss = downstream_to_tss[-(downstream_slice):]
+		tmp.write(f">{gene}\n{full_seq}\n")
 		tmp.flush()
 		tmp.close()
-		if downstream_to_tss:
-			tmp2.write(f">{gene}\n{downstream_to_tss}\n")
-			tmp2.flush()
-			tmp2.close()
-			moods_downstream_region_output_file = os.path.join(tmp_folder, f"{gene}_moods_downstream_to_tss.txt")
-			cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + tmp2.name + ' -p ' + str(
-				pvalue) + ' -o ' + moods_downstream_region_output_file
-			p = subprocess.Popen(args=cmd, shell=True)
-			p.communicate()
-		moods_output_file = os.path.join(tmp_folder,f"{gene}_moods.txt")
-		cmd = 'python3 ' + moods + ' -m ' + pfm_folder+'/*.pfm ' + '-s ' + tmp.name + ' -p ' + str(pvalue) + ' -o ' + moods_output_file
-		p = subprocess.Popen(args=cmd, shell=True)
-		p.communicate()
+		seq_len = len(full_seq)
+		downstream_len = len(downstream_to_tss)
 
-		rows = []
-		with open (moods_output_file, 'r') as f:
-			line = f.readline()
-			while line:
-				row = line.strip().rstrip(',').split(',')
-				rows.append(row)
-				line=f.readline()
-		sorted_rows = sorted(rows,key=lambda row:sort_key(row,orientation))
-		drows = []#drows means rows of downstream to tss region MOODS file
-		if os.path.exists(moods_downstream_region_output_file):
-			with open (moods_downstream_region_output_file, 'r') as f:
-				line = f.readline()
-				while line:
-					row = line.strip().rstrip(',').split(',')
-					drows.append(row)
-					line=f.readline()
-			sorted_drows = sorted(drows,key=lambda row:sort_key(row,orientation))
-		else:
-			sorted_drows = []
-		#collecting position-sign dictionary elements for motif density plot making
-		pos_strand = defaultdict(list)# defaultdict method is used here to account for cases where + and - hits occur at the same genomic position in which since genomic position is the key, it will be overwritten to retain just the last entry
-		upstream_motif_score = 0
-		for hit in sorted_rows:
-			if orientation == '+':
-				plot_pos = tss - (len(promoter_seq) - int(hit[2]))
-				pos_strand[plot_pos].append(hit[3])
-				if hit[3] == orientation and ((len(promoter_seq) - int(hit[2])) <= tss_prox):
-					upstream_motif_score += 1
-				elif hit[3] == orientation and ((len(promoter_seq) - int(hit[2])) > tss_prox):
-					upstream_motif_score += 0.5
-				if hit[3] != orientation and ((len(promoter_seq) - int(hit[2])) <= tss_prox):
-					upstream_motif_score += -0.25
-				elif hit[3] != orientation and ((len(promoter_seq) - int(hit[2])) > tss_prox):
-					upstream_motif_score += -0.5
-			elif orientation == '-':
-				plot_pos = tss + (int(hit[2]))
-				pos_strand[plot_pos].append(hit[3])
-				if hit[3] == orientation and ((int(hit[2])) <= tss_prox):
-					upstream_motif_score += 1
-				elif hit[3] == orientation and ((int(hit[2])) > tss_prox):
-					upstream_motif_score += 0.5
-				if hit[3] != orientation and ((int(hit[2])) <= tss_prox):
-					upstream_motif_score += -0.25
-				elif hit[3] != orientation and ((int(hit[2])) > tss_prox):
-					upstream_motif_score += -0.5
-
-		# collecting position-sign dictionary elements for motif density plot making in the TSS neighbourhood upstream and downstream
-		down_pos_strand=defaultdict(list)
-		if sorted_drows:
-			downstream_motif_score = 0
-			for hit in sorted_drows:
-				if orientation == '+':
-					plot_pos = tss + (int(hit[2]))
-					down_pos_strand[plot_pos].append(hit[3])
-					if hit[3] == orientation and ((int(hit[2])) <= tss_prox):#proximal same orientation motif
-						downstream_motif_score += 1
-					elif hit[3] == orientation and ((int(hit[2])) > tss_prox):#distal same orientation motif
-						downstream_motif_score += 0.5
-					elif hit[3] != orientation and ((int(hit[2])) <= tss_prox):#proximal different orientation motif
-						downstream_motif_score += -0.25
-					elif hit[3] != orientation and ((int(hit[2])) > tss_prox):#distal different orientation motif
-						downstream_motif_score += -0.5
-				elif orientation == '-':
-					plot_pos = tss - (len(promoter_seq) - int(hit[2]))
-					down_pos_strand[plot_pos].append(hit[3])
-					if hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
-						downstream_motif_score += 1
-					elif hit[3] == orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
-						downstream_motif_score += 0.5
-					elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) <= tss_prox):
-						downstream_motif_score += -0.25
-					elif hit[3] != orientation and ((len(downstream_to_tss) - int(hit[2])) > tss_prox):
-						downstream_motif_score += -0.5
-
-		if down_pos_strand:
-			moods_strands = pos_strand | down_pos_strand
-		else:
-			moods_strands = pos_strand
-		best_motif_hits=sorted_rows[:(top_motifs)]
-		motif_closeness = None
-		for hit in best_motif_hits:
-			if orientation=='+':
-				pos = int(hit[2])
-				if len(promoter_seq) - pos <= tss_prox:
-					motif_closeness = 'proximal motif'
-				else:
-					motif_closeness = 'distal motif'
-				actual_motif_pos = tss - (len(promoter_seq) - pos)
-				hit[2]= str(actual_motif_pos)
-			elif orientation=='-':
-				pos=int(hit[2])
-				if pos <= tss_prox:
-					motif_closeness = 'proximal motif'
-				else:
-					motif_closeness = 'distal motif'
-				actual_motif_pos = tss + (int(hit[2]))
-				hit[2] = str(actual_motif_pos)
-			hit.append(motif_closeness)
-		#plotting motif density lollipop plot
-		positions = list(pos_strand.keys())
-		fig, ax = plt.subplots()
-
-		fixed_heights = [0.4, 0.6, 0.8, 1.0]  # fixed height levels since no histogram to scale to
-
-		for i, (pos, signs) in enumerate(pos_strand.items()):
-			h = fixed_heights[i % len(fixed_heights)]
-			for j, sign in enumerate(signs):
-				colour = 'green' if sign == orientation else 'red'
-				h = fixed_heights[(i + j) % len(fixed_heights)]
-				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
-				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
-		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2, zorder=3)
-		ax.set_yticks([])  # no y-axis needed
-		ax.set_xlabel('Genomic position')
-		ax.axhline(0, color='black', linewidth=0.5)  # baseline
-		ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
-		ax.ticklabel_format(style='plain', axis='x')
-		plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
-		legend_elements = [
-			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
-			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='TATA motif (same orientation)'),
-			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='TATA motif (reverse orientation)')
-		]
-		ax.legend(handles=legend_elements, loc='best')
-		plt.tight_layout()
-		plt.savefig(motif_plot, dpi=600)
+		sorted_hits_dic = {}
+		cumulative_promoter_motif_score = 0
+		for elements in pfm_config_dic:
+			pfm_folder = pfm_config_dic[elements][0]
+			output_file = os.path.join(tmp_folder, f"{gene}_moods_{elements}.txt")
+			moods_file = run_moods(tmp.name, pfm_folder, output_file, moods, pvalue)
+			score, sorted_hits = compute_moods_score( moods_file, seq_len)
+			cumulative_promoter_motif_score += score
+			sorted_hits_dic[elements]=sorted_hits
+		#computing the percentile of cumulative promoter score with respect to the background scores based on the MOODS scoring
+		percentile_of_promoter_score = percentileofscore(bg_scores, cumulative_promoter_motif_score, kind='rank')
+		#positional scanning of promoter seqs for canonical hits
+		canonical_hits = 0
+		position_dic = {}
+		for elements in sorted_hits_dic:
+			position_dic[elements] = defaultdict(list)  # defaultdict method is used here to account for cases where + and - hits occur at the same genomic position in which since genomic position is the key, it will be overwritten to retain just the last entry
+			# checking for direction sensitive motif presence both upstream and downstream
+			for hit in sorted_hits_dic[elements]:
+				if pfm_config_dic[elements][3] == 'yes': # if direction sensitivity is yes in config
+					if orientation == "+":# for the code block with direction sensitivity check, collecting hits in all positions irrespective of direction before the direction check is performed
+						plot_pos = tss - (len(promoter_seq) - int(hit[2]))
+						position_dic[elements][plot_pos].append(hit[3])
+					elif orientation == '-':
+						plot_pos = tss + (int(hit[2]))
+						position_dic[elements][plot_pos].append(hit[3])
+					if hit[3] == orientation:
+						if orientation == '+':
+							if int(hit[2]) <= len(promoter_seq):
+								if ((len(promoter_seq) - int(hit[2])) <= pfm_config_dic[elements][1]):
+									canonical_hits += 1
+							else:
+								if int(hit[2]) - len(promoter_seq) <= pfm_config_dic[elements][2]:
+									canonical_hits += 1
+						elif orientation == '-':
+							if int(hit[2]) >= downstream_len:  # upstream
+								distance = int(hit[2]) - downstream_len
+								if distance <= pfm_config_dic[elements][1]:
+									canonical_hits += 1
+							elif int(hit[2]) < downstream_len:  # downstream
+								distance = downstream_len - int(hit[2])
+								if distance <= pfm_config_dic[elements][2]:
+									canonical_hits += 1
+				else:# if direction sensitivity is no in config
+					if orientation == '+':
+						plot_pos = tss - (len(promoter_seq) - int(hit[2]))
+						position_dic[elements][plot_pos].append(hit[3])
+						if int(hit[2]) <= len(promoter_seq):
+							if ((len(promoter_seq) - int(hit[2])) <= pfm_config_dic[elements][1]):
+								canonical_hits += 1
+						else:
+							if int(hit[2]) - len(promoter_seq) <= pfm_config_dic[elements][2]:
+								canonical_hits += 1
+					elif orientation == '-':
+						plot_pos = tss + (int(hit[2]))
+						position_dic[elements][plot_pos].append(hit[3])
+						if int(hit[2]) >= downstream_len:  # upstream
+							distance = int(hit[2]) - downstream_len
+							if distance <= pfm_config_dic[elements][1]:
+								canonical_hits += 1
+						elif int(hit[2]) < downstream_len:  # downstream
+							distance = downstream_len - int(hit[2])
+							if distance <= pfm_config_dic[elements][2]:
+								canonical_hits += 1
+		motifs = []
+		for elements in position_dic:
+			motifs.append({
+				"label": f"{elements} motif",
+				"positions": position_dic[elements],
+			})
+		n_motifs = len(motifs)
+		ncols = numcols
+		nrows = math.ceil(n_motifs / ncols)
+		fig, axes = plt.subplots(nrows, ncols,figsize=(6 * ncols, 3 * nrows),squeeze=False)
 		#lollipop plot of up and downstream regions of predicted TSS
-		for i, (pos, signs) in enumerate(moods_strands.items()):
-			h = fixed_heights[i % len(fixed_heights)]
-			for j, sign in enumerate(signs):
-				colour = 'green' if sign == orientation else 'red'
-				h = fixed_heights[(i + j) % len(fixed_heights)]
-				ax.vlines(pos, ymin=0, ymax=h, linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
-				ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
-		ax.vlines(tss, ymin=0, ymax=1.2, linestyle='solid', color='black', linewidth=2, zorder=3)
-		ax.set_yticks([])  # no y-axis needed
-		ax.set_xlabel('Genomic position')
-		ax.axhline(0, color='black', linewidth=0.5)  # baseline
-		ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
-		ax.ticklabel_format(style='plain', axis='x')
-		plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+		fixed_heights = [0.4, 0.6, 0.8, 1.0]  # fixed height levels since no histogram to scale to
 		legend_elements = [
 			Line2D([0], [0], color='black', linewidth=2, linestyle='solid', label='TSS'),
-			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='TATA motif (same orientation)'),
-			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='TATA motif (reverse orientation)')
+			Line2D([0], [0], color='green', linewidth=1, linestyle='dotted', label='Same orientation motif'),
+			Line2D([0], [0], color='red', linewidth=1, linestyle='dotted', label='Reverse orientation motif')
 		]
-		ax.legend(handles=legend_elements, loc='best')
+		for idx, motif in enumerate(motifs):
+			row, col = divmod(idx, ncols)
+			ax = axes[row][col]
+
+			for i, (pos, signs) in enumerate(motif["positions"].items()):
+				for j, sign in enumerate(signs):
+					colour = 'green' if sign == orientation else 'red'
+					h = fixed_heights[(i + j) % len(fixed_heights)]
+					ax.vlines(pos, ymin=0, ymax=h,
+							  linestyle='dotted', color=colour, linewidth=1.5, zorder=2)
+					ax.plot(pos, h, 'o', color=colour, markersize=4, zorder=2)
+
+			ax.vlines(tss, ymin=0, ymax=1.2,
+					  linestyle='solid', color='black', linewidth=2, zorder=3)
+			ax.axhline(0, color='black', linewidth=0.5)
+			ax.set_yticks([])
+			ax.set_xlabel('Genomic position')
+			ax.set_title(motif["label"], fontsize=10, fontweight='bold')
+			ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False))
+			ax.ticklabel_format(style='plain', axis='x')
+			plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+			ax.legend(handles=legend_elements, loc='best', fontsize=7)
+
+		# Hide any unused subplot panels
+		for idx in range(n_motifs, nrows * ncols):
+			row, col = divmod(idx, ncols)
+			axes[row][col].set_visible(False)
+
 		plt.tight_layout()
 		plt.savefig(tss_neighbourhood, dpi=600)
 		plt.close()
-
-		if down_pos_strand:
-			if upstream_motif_score > downstream_motif_score:
-				tss_confidence = 'High confidence'
-			elif upstream_motif_score == downstream_motif_score and upstream_motif_score != 0:
-				tss_confidence = 'Moderate confidence'
-			elif upstream_motif_score < downstream_motif_score or upstream_motif_score == 0:
-				tss_confidence = 'Low confidence'
-		else:
-			tss_confidence = 'High confidence'
-
 	finally:
 		if os.path.exists(tmp.name):
 			os.remove(tmp.name)
-		if os.path.exists(tmp2.name):
-			os.remove(tmp2.name)
-	return best_motif_hits, tss_confidence
+	return cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits
+
 
 def main( arguments ):
 	"""! @brief run everything """
@@ -1099,6 +1220,16 @@ def main( arguments ):
 	else:
 		max_promoter_size = 1000
 
+	if '--downstream_size' in arguments:
+		downstream_size = arguments[arguments.index('--downstream_size')+1]
+	else:
+		downstream_size = 300
+
+	if '--background' in arguments:
+		background_strength = int(arguments[arguments.index('--background')+1])
+	else:
+		background_strength = 1000
+
 	if '--aligner' in arguments:# <STAR/HISAT2> option for user to use star or HISAT2 aligners
 		aligner = arguments[arguments.index('--aligner')+1]
 	else:
@@ -1145,26 +1276,52 @@ def main( arguments ):
 	else:
 		moods = 'moods-dna.py'
 
+	pfm_config_dic = {}
 	if promoter_analysis == 'yes':
-		#full path to folder with PFM matrices
-		pfm_folder = arguments[arguments.index('--PFM')+1]
+		#full path to config file with full path to folder(s) with PFM matrices, upstream, downstream motif position boundaries, directional sensitivity of the promoter motif (yes or no) for different motif elements respectively
+		pfm_config = arguments[arguments.index('--PFM')+1]
+		with open (pfm_config, 'r') as f:
+			for line in f:
+				parts = line.strip().split()
+				pfm_config_dic[parts[0]] = (parts[1], int(parts[2]), int(parts[3]), parts[4])
+
+		#number of columns for plotting the motif hits
+		if '--numcols' in arguments:
+			numcols = int(arguments[arguments.index('--numcols')+1])
+		else:
+			numcols = 2
 
 	#p-value threshold for MOODS analysis
 	if '--pval' in arguments:
 		pvalue = float(arguments[arguments.index('--pval')+1])
 	else:
-		pvalue = 0.0001
+		pvalue = 0.001
+
+	#p-value threshold for cumulative moods score statistical analysis in the tool
+	if '--p_significance' in arguments:
+		psig = float(arguments[arguments.index('--p_significance')+1])
+	else:
+		psig = 0.05
 
 	if '--top_motif_hit' in arguments:
 		top_motifs = int(arguments[arguments.index('--top_motif_hit')+1])
 	else:
 		top_motifs = 1
 
-	if '--tss_proximity' in arguments:
-		tss_prox = int(arguments[arguments.index('--tss_proximity')+1])
+	if '--coverage_walk_origin' in arguments: #cds or utr
+		coverage_walk_origin = arguments[arguments.index('--coverage_walk_origin')+1]
 	else:
-		tss_prox = 30
+		coverage_walk_origin = 'cds'
 
+	if '--upstream_slice' in arguments:
+		upstream_slice = arguments[arguments.index('--upstream_slice')+1]
+	else:
+		upstream_slice = 200
+
+	if '--downstream_slice' in arguments:
+		downstream_slice = arguments[arguments.index('--downstream_slice')+1]
+	else:
+		downstream_slice = 50
 
 	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
 	if run_mode == 'make_bam':
@@ -1180,8 +1337,8 @@ def main( arguments ):
 					if parts[2].lower() == 'exon':
 						fields = parts[8].strip().split(';')
 						for each in fields:
-							if 'Parent=' in each:
-								transcript = each.replace('Parent=', '')
+							if f'{child_parent_linker}=' in each:
+								transcript = each.replace(f'{child_parent_linker}=', '')
 								start = int(parts[3])
 								end = int(parts[4])
 								if transcript not in trans_exon_map:
@@ -1321,50 +1478,83 @@ def main( arguments ):
 	scoverage = load_coverage( scov_file, input_mode )
 	
 	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
-	
-	genome_seq = load_sequences( fasta_file )
-	
+	genome_seq, seq_counter = load_sequences( fasta_file )
+	if promoter_analysis == 'yes':
+		print("Retrieving background seqs.")
+		background_seq_len = upstream_slice + downstream_slice
+		background_seqs = get_random_background_seqs(genome_seq, seq_counter, background_seq_len, background_strength)
+		print("Completed retrieving background seqs.")
+		print("Starting MOODS scoring of background seqs.")
+		bg_scores = compute_background_moods_scores(background_seqs, pfm_config_dic, tmp_folder, output_folder, moods,pvalue)
+		print("Completed MOODS scoring of background seqs.")
 	#run analysis per gene of interest
-	results = {}
-	motifs = []
-	#confidence_score_dic = {}
-	tss_confidence_dic = {}
-	isoforms_dic = {}
-	distance_dic = {}
-	coverage_dic = {}
-	five_utr_dic = {}
+		# run analysis per gene of interest
+		results = {}
+		motifs = []
+		motif_scores = {}
+		pvalue_dic = {}
+		full_seq_pos_strand_gene = {}
+		full_seq_neg_strand_gene = {}
+		# confidence_score_dic = {}
+		tss_confidence_dic = {}
+		isoforms_dic = {}
+		distance_dic = {}
+		coverage_dic = {}
+		five_utr_dic = {}
+		percentile_dic = {}
+		canonical_hits_dic = {}
 	for gene in goi:
 		try:
-			cov_per_contig = coverage[ gene_infos[ gene ]['chromosome'] ]	#get coverage of the sequence that harbours the gene of interest
-			scov_per_contig = scoverage[ gene_infos[ gene ]['chromosome'] ]	#get spanning read coverage of the sequence that harbours the gene of interest
-			seq_per_contig = genome_seq[ gene_infos[ gene ]['chromosome'] ]	#get the sequence of the contig/pseudochromosome that harbours the gene of interest
-			#code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
+			cov_per_contig = coverage[gene_infos[gene]['chromosome']]  # get coverage of the sequence that harbours the gene of interest
+			scov_per_contig = scoverage[gene_infos[gene]['chromosome']]  # get spanning read coverage of the sequence that harbours the gene of interest
+			seq_per_contig = genome_seq[gene_infos[gene]['chromosome']]  # get the sequence of the contig/pseudochromosome that harbours the gene of interest
+			# code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
 			# Initialize with gene coordinates as default with 5'UTR checks downstream
-			start, end, orientation, contig = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation'], gene_infos[ gene ]['chromosome'] # get information about gene of interest if it does not have 5'UTRs annotated
+			start, end, orientation, contig = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation'], gene_infos[gene]['chromosome']  # get information about gene of interest if it does not have 5'UTRs annotated
 			# store ATG position as fixed reference before start may be modified by 5'UTR code block
 			if gene in gene_atg_dic:
 				atg_pos = gene_atg_dic[gene]
 			else:
 				atg_pos = start if orientation == '+' else end  # fallback to gene boundary if no CDS found
 			if gene in transcripts_per_gene:
-				transcript_list = transcripts_per_gene[ gene ]
+				transcript_list = transcripts_per_gene[gene]
 				for each in transcript_list:
-					if each in five_utr_infos and gene_infos[ gene ]['orientation']=='+' and each==transcript_list[0]:
-						start=five_utr_infos[each]['start'] #in case a gene has transcripts with 5'UTR annotated, the most upstream 5'UTR will be taken as the start for the + strand gene
-						end, orientation = gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest
-						five_utr_dic[gene]=f"5'UTR start of {each} used for TSS prediction."
-						break
-					elif each in five_utr_infos and gene_infos[ gene ]['orientation']=='-' and each==transcript_list[-1]:
-						end = five_utr_infos[each]['end']  # in case a gene has transcripts with 5'UTR annotated, the most downstream 5'UTR will be taken as the start for the - strand gene
-						start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
-						five_utr_dic[gene] = f"5'UTR end of {each} used for TSS prediction."
-						break
-			if gene not in five_utr_dic and orientation == '+':
-				five_utr_dic[gene] = f"No 5'UTR annotated. {gene} start used for TSS prediction."
-			if gene not in five_utr_dic and orientation == '-':
-				five_utr_dic[gene] = f"No 5'UTR annotated. {gene} end used for TSS prediction."
+					if coverage_walk_origin == 'utr':
+						if each in five_utr_infos and gene_infos[gene]['orientation'] == '+' and each == transcript_list[0]:
+							start = five_utr_infos[each]['start']  # in case a gene has transcripts with 5'UTR annotated, the most upstream 5'UTR will be taken as the start for the + strand gene
+							end, orientation = gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest
+							five_utr_dic[gene] = f"5'UTR start of {each} used for TSS prediction."
+							break
+						elif each in five_utr_infos and gene_infos[gene]['orientation'] == '-' and each == transcript_list[-1]:
+							end = five_utr_infos[each]['end']  # in case a gene has transcripts with 5'UTR annotated, the most downstream 5'UTR will be taken as the start for the - strand gene
+							start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
+							five_utr_dic[gene] = f"5'UTR end of {each} used for TSS prediction."
+							break
+					elif coverage_walk_origin == 'cds':
+						if each in cds_infos and gene_infos[gene]['orientation'] == '+' and each == transcript_list[0]:
+							cds_infos[each].sort(key=lambda cds: cds[0])
+							start = cds_infos[each][0][0]  # the most upstream CDS start will be taken as the coverage walking start for the + strand gene
+							end, orientation = gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest
+							five_utr_dic[gene] = f"CDS start of {each} used for TSS prediction."
+							break
+						elif each in cds_infos and gene_infos[gene]['orientation'] == '-' and each == transcript_list[-1]:
+							cds_infos[each].sort(key=lambda cds: cds[1])
+							end = cds_infos[each][-1][1]  # the most upstream CDS end will be taken as the coverage walking start for the - strand gene
+							start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
+							five_utr_dic[gene] = f"CDS end of {each} used for TSS prediction."
+							break
+			if coverage_walk_origin == 'utr':
+				if gene not in five_utr_dic and orientation == '+':
+					five_utr_dic[gene] = f"No 5'UTR annotated. {gene} start used for TSS prediction."
+				if gene not in five_utr_dic and orientation == '-':
+					five_utr_dic[gene] = f"No 5'UTR annotated. {gene} end used for TSS prediction."
+			elif coverage_walk_origin == 'cds':
+				if gene not in five_utr_dic and orientation == '+':
+					five_utr_dic[gene] = f"No CDS annotated. {gene} start used for TSS prediction."
+				if gene not in five_utr_dic and orientation == '-':
+					five_utr_dic[gene] = f"No CDS annotated. {gene} end used for TSS prediction."
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
-			avg_cov_gene = sum(cov_per_contig[start-1:end])/(end-(start-1)) #get average coverage of the gene of interest for confidence thresholding
+			avg_cov_gene = sum(cov_per_contig[start - 1:end]) / (end - (start - 1))  # get average coverage of the gene of interest for confidence thresholding
 			#check if goi is an overlapping gene
 			#TSS-blocking overlap types
 			SKIP_TSS_TYPES = {'head_head', 'head_into_neighbor', 'same_strand', 'nested'}#'tail_tail' and 'tail_into_neighbor' overlap types are safe for TSS analysis
@@ -1399,12 +1589,15 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter, downstream_to_tss = extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+				full_seq_pos_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue,top_motifs, tss_prox, pfm_folder, tmp_folder, output_folder)
-						motifs.append(best_motif_hits)
-						tss_confidence_dic[gene] = tss_confidence
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder, psig)
+						#motifs.append(best_motif_hits)
+						motif_scores[gene] = cumulative_promoter_motif_score
+						percentile_dic[gene] = percentile_of_promoter_score
+						canonical_hits_dic[gene] = canonical_hits
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
@@ -1417,12 +1610,14 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				promoter_status, promoter, downstream_to_tss = extract_promoter_region( start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size )
+				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+				full_seq_neg_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						best_motif_hits, tss_confidence = promoter_motif_analysis(result, gene, orientation, promoter, downstream_to_tss, moods, pvalue, top_motifs,tss_prox, pfm_folder, tmp_folder, output_folder)
-						motifs.append(best_motif_hits)
-						tss_confidence_dic[gene] = tss_confidence
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder, psig)
+						motif_scores[gene] = cumulative_promoter_motif_score
+						percentile_dic[gene] = percentile_of_promoter_score
+						canonical_hits_dic[gene] = canonical_hits
 					else:
 						print('MOODS not found. Promoter analysis not possible.')
 				result.update( { 'promoter_status': promoter_status } )
@@ -1451,7 +1646,6 @@ def main( arguments ):
 			"""
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "Results.tsv"
-	promoter_motif_output_file = os.path.join(output_folder,'Top_promoter_motifs.tsv')
 	with open( final_output_file, "w" ) as out:
 		if promoter_analysis != 'yes':
 			out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
@@ -1467,12 +1661,14 @@ def main( arguments ):
 													str(five_utr_dic[gene])
 											] ) + "\n" )
 		elif promoter_analysis == 'yes':
-			out.write( "\t".join( [ "GeneID", "TSS", "TSS confidence", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
+			out.write( "\t".join( [ "GeneID", "TSS", "Promoter motif score", "Promoter motif percentile", "Canonical motif hits", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
 			for gene in list( results.keys() ):
-				if gene in results and gene in tss_confidence_dic:
+				if gene in results:
 					out.write( "\t".join( [ 	gene,
 														str( results[ gene ]['TSS'] ),
-														str(tss_confidence_dic[gene]),
+														str(motif_scores[gene]),
+														str(percentile_dic[gene]),
+														str(canonical_hits_dic[gene]),
 														str(coverage_dic[gene]),
 														str(isoforms_dic[gene]),
 														str( results[ gene ]['start'] ),
@@ -1481,16 +1677,6 @@ def main( arguments ):
 														str( results[ gene ]['promoter'] ),
 														str(five_utr_dic[gene])
 												] ) + "\n" )
-
-	# --- write top promoter motif hits in a separate output file --- #
-	if promoter_analysis == 'yes':
-		if motifs:
-			with open (promoter_motif_output_file,'w')as out:
-				for hit_list in motifs:
-					for hits in hit_list:
-						out.write('\t'.join(hits)+'\n')
-		else:
-			print('No valid top motifs list found. Promoter motif analysis file not written.')
 
 
 if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
