@@ -1,7 +1,7 @@
 ### Boas Pucker ###
 ### Shakunthala Natarajan ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.03"
+__version__ = "v0.1"
 
 __reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
 
