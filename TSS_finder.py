@@ -335,24 +335,17 @@ def get_random_fragment(contig, seq_len):
 	start = random.randint(0,(len(contig) - seq_len))
 	random_seq = contig[start:start+seq_len]
 	return random_seq
-#function to get random background seqs from the genome
-def get_random_background_seqs (genome_seq, contig_counter,seq_len, background_strength):
-	contig_len_list = []
-	for contig in genome_seq:
-		contig_len_list.append((contig,len(contig)))
-	#sorting the contigs in descending order of their lengths so that longer contigs contribute to the random background seqs in case the background cap is reached before the contribution from each contig is included
-	sorted_contig_len_list = sorted(contig_len_list, key=lambda x: x[1], reverse=True)
+
+#function to randomly keep sampling one random seq from each contig in the genome iteratively until the background strength cap is reached
+def get_random_background_seqs(genome_seq, seq_len, background_strength):
 	background = []
-	seqs_to_sample_per_contig = math.ceil(background_strength/contig_counter)
-	for contig in genome_seq:
-		if len(genome_seq[contig]) > seq_len:
-			seqs_per_contig = 0
-			while seqs_per_contig < seqs_to_sample_per_contig:
+	while len(background) < background_strength:
+		for contig in genome_seq:
+			if len(genome_seq[contig]) > seq_len:
 				if len(background) >= background_strength:
 					break
 				random_seq = get_random_fragment(genome_seq[contig], seq_len)
 				background.append(random_seq)
-				seqs_per_contig +=1
 	return background
 
 def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
@@ -1482,7 +1475,7 @@ def main( arguments ):
 	if promoter_analysis == 'yes':
 		print("Retrieving background seqs.")
 		background_seq_len = upstream_slice + downstream_slice
-		background_seqs = get_random_background_seqs(genome_seq, seq_counter, background_seq_len, background_strength)
+		background_seqs = get_random_background_seqs(genome_seq, background_seq_len, background_strength)
 		print("Completed retrieving background seqs.")
 		print("Starting MOODS scoring of background seqs.")
 		bg_scores = compute_background_moods_scores(background_seqs, pfm_config_dic, tmp_folder, output_folder, moods,pvalue)
