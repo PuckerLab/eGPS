@@ -914,7 +914,7 @@ def compute_background_moods_scores (background_seqs, pfm_config_dic, tmp_folder
 	return background_scores
 
 #function to scan extracted promoter sequences for user-specified promoter motif elements
-def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder, output_folder, psig):
+def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder, output_folder):
 	tss_neighbourhood = os.path.join(output_folder,f'{gene}_tss_neighbourhood.png')
 	tss = result['TSS']
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
@@ -1028,6 +1028,11 @@ def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_score
 			ax.vlines(tss, ymin=0, ymax=1.2,
 					  linestyle='solid', color='black', linewidth=2, zorder=3)
 			ax.axhline(0, color='black', linewidth=0.5)
+			#setting the plot boundary to the length of the sequence used for the promoter analysis
+			if orientation == '+':
+				ax.set_xlim(tss - upstream_slice, tss + downstream_slice)
+			elif orientation == '-':
+				ax.set_xlim(tss - downstream_slice, tss + upstream_slice)
 			ax.set_yticks([])
 			ax.set_xlabel('Genomic position')
 			ax.set_title(motif["label"], fontsize=10, fontweight='bold')
@@ -1290,12 +1295,6 @@ def main( arguments ):
 	else:
 		pvalue = 0.001
 
-	#p-value threshold for cumulative moods score statistical analysis in the tool
-	if '--p_significance' in arguments:
-		psig = float(arguments[arguments.index('--p_significance')+1])
-	else:
-		psig = 0.05
-
 	if '--top_motif_hit' in arguments:
 		top_motifs = int(arguments[arguments.index('--top_motif_hit')+1])
 	else:
@@ -1307,12 +1306,12 @@ def main( arguments ):
 		coverage_walk_origin = 'cds'
 
 	if '--upstream_slice' in arguments:
-		upstream_slice = arguments[arguments.index('--upstream_slice')+1]
+		upstream_slice = int(arguments[arguments.index('--upstream_slice')+1])
 	else:
 		upstream_slice = 200
 
 	if '--downstream_slice' in arguments:
-		downstream_slice = arguments[arguments.index('--downstream_slice')+1]
+		downstream_slice = int(arguments[arguments.index('--downstream_slice')+1])
 	else:
 		downstream_slice = 50
 
@@ -1586,7 +1585,7 @@ def main( arguments ):
 				full_seq_pos_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder, psig)
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder)
 						#motifs.append(best_motif_hits)
 						motif_scores[gene] = cumulative_promoter_motif_score
 						percentile_dic[gene] = percentile_of_promoter_score
@@ -1607,7 +1606,7 @@ def main( arguments ):
 				full_seq_neg_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder, psig)
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder)
 						motif_scores[gene] = cumulative_promoter_motif_score
 						percentile_dic[gene] = percentile_of_promoter_score
 						canonical_hits_dic[gene] = canonical_hits
