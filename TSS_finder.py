@@ -1659,6 +1659,14 @@ def main( arguments ):
 			"""
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "Results.tsv"
+	pos_strand_tss_neighbourhood_file = output_folder + "Positive_strand_gene_promoter_downstream_seqs.fasta"
+	neg_strand_tss_neighbourhood_file = output_folder + "Negative_strand_gene_promoter_downstream_seqs.fasta"
+	with open (pos_strand_tss_neighbourhood_file, 'w') as out:
+		for each in full_seq_pos_strand_gene:
+			out.write(f">{each}\n{full_seq_pos_strand_gene[each]}\n")
+	with open (neg_strand_tss_neighbourhood_file, 'w') as out:
+		for each in full_seq_neg_strand_gene:
+			out.write(f">{each}\n{full_seq_neg_strand_gene[each]}\n")
 	with open( final_output_file, "w" ) as out:
 		if promoter_analysis != 'yes':
 			out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
