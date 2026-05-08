@@ -3,7 +3,7 @@
 ### pucker@uni-bonn.de ###
 __version__ = "v0.1"
 
-__reference__ = "Pucker et al., 2025: https://github.com/bpucker/TSS_finder"
+__reference__ = "https://github.com/bpucker/TSS_finder"
 
 __usage__ = """
 					TSS_finder """ + __version__ + """("""+ __reference__ +""")
@@ -12,10 +12,12 @@ __usage__ = """
 					python3 TSS_finder.py
 					--fasta <GENOMIC_FASTA_FILE>
 					--gff <GFF_FILE>
+					--goi <TXT_FILE_WITH_LIST_OF_GENES_OF_INTEREST_ONE_PER_LINE>
 					--out <OUTPUT_FOLDER>
-					[--bam <BAM_FILE>|--cov <COV_FILE> --scov <SCOV_FILE>]
+					[--sra_folder <READ_FILES> | --bam <BAM_FILE>|--cov <COV_FILE> --scov <SCOV_FILE>]
 					
 					optional:
+					--coverage_walk_origin <cds or utr> DEFAULT is cds
 					--mincov <MINIMAL_COVERAGE>[1]
 					--bam_is_sorted <PREVENTS_BAM_FILE_SORTING>
 					--samtools <FULL_PATH_TO_SAMTOOLS>[samtools]
@@ -26,6 +28,25 @@ __usage__ = """
 					--flanksize <FLANKING_REGION_SIZE>[50]
 					--gapsize <COVERAGE_GAP_SIZE>[5]
 					--splicesites <HANDLING_OF_SPLICE_SITES>[strict](strict|off)
+					--gff_config <TXT_CONFIG_FILE_WITH_OPTIONS_TO_DEFINE_THE_GFF_ATTRIBUTE_FIELDS>
+					--intron_percentile_cutoff <INTRON_SIZE_CUTOFF_FOR_STAR+HISAT2_ALIGNMENT>
+					--neighbourhood <GENE_NEIGHBOURHOOD_WINDOW_FOR_OVERLAPPING_GENE_ANALYSIS>
+					--min_promoter_size <MINIMUM_PROMOTER_SIZE>
+					--max_promoter_size <MAXIMUM_PROMOTER_SIZE>
+					--background < NUMBER_OF_RANDOM_BACKGROUND_SEQUENCES_TO_BE_CONSIDERED_FOR_MOTIF_SCORING>
+					--downstream_size <LENGTH_OF_ANALYSIS_REGION_DOWNSTREAM_TO_TSS>
+					--upstream_slice <LENGTH_OF_PROMOTER_REGION_TO_BE_SLICED_FOR_MOTIF_ANALYSIS>
+					--downstream_slice <LENGTH_OF_DOWNSTREAM_REGION_TO_BE_SLICED_FOR_MOTIF_ANALYSIS>
+					--aligner <STAR or HISAT2> STAR is default
+					--HISAT2 <FULL_PATH_TO_HISAT2_FOR_RNA_Seq_MAPPING>
+					--STAR <FULL_PATH_TO_STAR_FOR_RNA_Seq_MAPPING>
+					--index_bases <PARAMETER_FOR_GENOME_INDEX_GENERATION_IN_STAR>
+					--run_mode < find_tss or make_bam> find_tss is default
+					--fastq_pattern <FASTQ_FILE_NAME_PATTERN_SEPARATED_BY_COMMA><EG: pass1,pass2 >
+					--analyse_promoter <yes or no> default is no
+					--moods <FULL_PATH_TO_MOODS_SCRIPT>
+					--PFM <TXT_FILE_FOR_PROMOTER_MOTIF_ANALYSIS; TAB_SEPARATED; MOTIF_NAME	PATH_TO_PFM_FILE	UPSTREAM_BOUNDARY	DOWNSTREAM_BOUNDARY	DIRECTION_SENSITIVITY>
+					--pval <MOODS_MOTIF_ANALYSIS_THRESHOLD>
 					"""
 
 
