@@ -1280,7 +1280,7 @@ def main( arguments ):
 		sra_folder = ''
 
 	if '--fastq_pattern' in arguments:
-		pattern_names=arguments[arguments.index('--fastq_patern')+1]#specify fastq read file name pattern for the paired end files separated by commas without spaces like - _pass_1,_pass_2_
+		pattern_names = arguments[arguments.index('--fastq_pattern')+1]#specify fastq read file name pattern for the paired end files separated by commas without spaces like - _pass_1,_pass_2_
 		pattern_names_list = pattern_names.split(',')
 	else:
 		pattern_names_list = ["_pass_1", "_pass_2"]
@@ -1412,6 +1412,7 @@ def main( arguments ):
 		star_mapping_folder = os.path.join(output_folder, 'RNA-seq_map')
 		os.mkdir(star_mapping_folder)
 		if sra_folder:
+			print(f"[INFO] Using read patterns: R1='{pattern_names_list[0]}', R2='{pattern_names_list[1]}'")
 			pairs = defaultdict(dict)  # create a default dictionary for holding the paired end files
 
 			# Recursively walk through all subdirectories
@@ -1474,12 +1475,14 @@ def main( arguments ):
 				if not os.path.exists(merged_bam):
 					raise FileNotFoundError(f"Merge failed: {merged_bam} was not created")
 
-			elif len(os.listdir(star_mapping_folder)) == 1:
-				for f in (os.listdir(star_mapping_folder)):
-					sorted_merged_bam_file = f
+			elif len(bam_list) == 1:
+				merged_bam = bam_list[0]
+
+			else:
+				raise FileNotFoundError(f"No BAM files found in {star_mapping_folder}")
+
 			cov_file = output_folder + "reads_aligned.cov"
 			scov_file = output_folder + "reads_spanning.cov"
-
 			if not os.path.isfile(cov_file):
 				construct_cov_file(merged_bam, cov_file, bedtools)
 			if not os.path.isfile(scov_file):
