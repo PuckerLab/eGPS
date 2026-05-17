@@ -1,4 +1,4 @@
-# TSS_finder
+# eGPS: eukaryotic Gene Promoter Seeker
 
 ## Background
 This tool was developed to identify transcription start sites (TSS) in plants based on RNA-seq data coverage. The approach looks for the most 5' position upstream of a start codon (ATG) that is covered by RNA-seq reads. The coverage of aligned reads and the coverage of spanning reads are considered in this analysis. Input for the analysis is an RNA-seq read mapping (BAM file). The genome sequence and positions of genes are required for the TSS identification.
