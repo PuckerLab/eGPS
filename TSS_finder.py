@@ -838,7 +838,7 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 
 def extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size ):
 	"""! @brief extract promoter region """
-	
+
 	tss = result['TSS']
 	gene_start = result['start']
 	gene_end = result['end']
