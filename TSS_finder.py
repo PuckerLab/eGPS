@@ -1503,22 +1503,22 @@ def main( arguments ):
 		print("Starting MOODS scoring of background seqs.")
 		bg_scores = compute_background_moods_scores(background_seqs, pfm_config_dic, tmp_folder, output_folder, moods,pvalue)
 		print("Completed MOODS scoring of background seqs.")
-	#run analysis per gene of interest
-		# run analysis per gene of interest
-		results = {}
-		motifs = []
-		motif_scores = {}
-		pvalue_dic = {}
-		full_seq_pos_strand_gene = {}
-		full_seq_neg_strand_gene = {}
-		# confidence_score_dic = {}
-		tss_confidence_dic = {}
-		isoforms_dic = {}
-		distance_dic = {}
-		coverage_dic = {}
-		five_utr_dic = {}
-		percentile_dic = {}
-		canonical_hits_dic = {}
+
+	# run analysis per gene of interest
+	results = {}
+	motifs = []
+	motif_scores = {}
+	pvalue_dic = {}
+	full_seq_pos_strand_gene = {}
+	full_seq_neg_strand_gene = {}
+	# confidence_score_dic = {}
+	tss_confidence_dic = {}
+	isoforms_dic = {}
+	distance_dic = {}
+	coverage_dic = {}
+	five_utr_dic = {}
+	percentile_dic = {}
+	canonical_hits_dic = {}
 	for gene in goi:
 		try:
 			cov_per_contig = coverage[gene_infos[gene]['chromosome']]  # get coverage of the sequence that harbours the gene of interest
