@@ -1298,10 +1298,9 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	return just_up_gene, just_down_gene, up_genes, down_genes
 	
 
-def extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size ):
+def extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size ):
 	"""! @brief extract promoter region """
 
-	tss = result['TSS']
 	gene_start = result['start']
 	gene_end = result['end']
 	if orientation == "+":	#forward strand
@@ -1397,9 +1396,8 @@ def compute_background_moods_scores (background_seqs, pfm_config_dic, tmp_folder
 	return background_scores
 
 #function to scan extracted promoter sequences for user-specified promoter motif elements
-def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder, output_folder):
-	tss_neighbourhood = os.path.join(output_folder,f'{gene}_tss_neighbourhood.png')
-	tss = result['TSS']
+def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, tss, tss_type, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder, output_folder):
+	tss_neighbourhood = os.path.join(output_folder,f'{gene}_{tss_type}_tss_neighbourhood.png')
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
 	try:
 		if orientation == '+':
@@ -1410,7 +1408,7 @@ def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_score
 			full_seq = downstream_to_tss[-(downstream_slice):] + promoter_seq[:upstream_slice]
 			promoter_seq = promoter_seq[:upstream_slice]
 			downstream_to_tss = downstream_to_tss[-(downstream_slice):]
-		tmp.write(f">{gene}\n{full_seq}\n")
+		tmp.write(f">{gene}_{tss_type}\n{full_seq}\n")
 		tmp.flush()
 		tmp.close()
 		seq_len = len(full_seq)
@@ -1420,7 +1418,7 @@ def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_score
 		cumulative_promoter_motif_score = 0
 		for elements in pfm_config_dic:
 			pfm_folder = pfm_config_dic[elements][0]
-			output_file = os.path.join(tmp_folder, f"{gene}_moods_{elements}.txt")
+			output_file = os.path.join(tmp_folder, f"{gene}_{tss_type}_tss_moods_{elements}.txt")
 			moods_file = run_moods(tmp.name, pfm_folder, output_file, moods, pvalue)
 			score, sorted_hits = compute_moods_score( moods_file, seq_len)
 			cumulative_promoter_motif_score += score
@@ -2035,6 +2033,8 @@ def main( arguments ):
 	pvalue_dic = {}
 	full_seq_pos_strand_gene = {}
 	full_seq_neg_strand_gene = {}
+	promoter_status_dic = {}
+	promoter_dic = {}
 	# confidence_score_dic = {}
 	tss_confidence_dic = {}
 	isoforms_dic = {}
@@ -2135,19 +2135,32 @@ def main( arguments ):
 					hard_cutoff = 1
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( strength, lookahead, output_folder, pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
-				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
-				full_seq_pos_strand_gene[gene] = full_seq
-				if promoter_analysis == 'yes':
-					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
-						#motifs.append(best_motif_hits)
-						motif_scores[gene] = cumulative_promoter_motif_score
-						percentile_dic[gene] = percentile_of_promoter_score
-						canonical_hits_dic[gene] = canonical_hits
-					else:
-						print('MOODS not found. Promoter analysis not possible.')
-				result.update( { 'promoter_status': promoter_status } )
-				result.update( { 'promoter': promoter } )
+				tss_list = {}
+				if basal_tss:
+					tss_list['basal']=basal_tss
+				if elevated_tss:
+					tss_list['elevated']=elevated_tss
+				if accelerated_tss:
+					tss_list['accelerated']=accelerated_tss
+				full_seq_pos_strand_gene[gene]={}
+				promoter_status_dic[gene] = {}
+				promoter_dic[gene] = {}
+				motif_scores[gene] = {}
+				percentile_dic[gene] = {}
+				canonical_hits_dic[gene] = {}
+				for tss_type in tss_list:
+					promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+					full_seq_pos_strand_gene[gene][tss_type] = full_seq
+					promoter_status_dic[gene][tss_type] = promoter_status
+					promoter_dic[gene][tss_type] = promoter
+					if promoter_analysis == 'yes':
+						if os.path.exists(moods):
+							cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
+							motif_scores[gene][tss_type] = cumulative_promoter_motif_score
+							percentile_dic[gene][tss_type] = percentile_of_promoter_score
+							canonical_hits_dic[gene][tss_type] = canonical_hits
+						else:
+							print('MOODS not found. Promoter analysis not possible.')
 				results.update( { gene: result } )
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
@@ -2157,50 +2170,54 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( strength, lookahead, output_folder ,pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
-				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
-				full_seq_neg_strand_gene[gene] = full_seq
-				if promoter_analysis == 'yes':
-					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
-						motif_scores[gene] = cumulative_promoter_motif_score
-						percentile_dic[gene] = percentile_of_promoter_score
-						canonical_hits_dic[gene] = canonical_hits
-					else:
-						print('MOODS not found. Promoter analysis not possible.')
-				result.update( { 'promoter_status': promoter_status } )
-				result.update( { 'promoter': promoter } )
+				tss_list = {}
+				if basal_tss:
+					tss_list['basal'] = basal_tss
+				if elevated_tss:
+					tss_list['elevated'] = elevated_tss
+				if accelerated_tss:
+					tss_list['accelerated'] = accelerated_tss
+				full_seq_pos_strand_gene[gene] = {}
+				promoter_status_dic[gene] = {}
+				promoter_dic[gene] = {}
+				motif_scores[gene] = {}
+				percentile_dic[gene] = {}
+				canonical_hits_dic[gene] = {}
+				for tss_type in tss_list:
+					promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+					full_seq_pos_strand_gene[gene][tss_type] = full_seq
+					promoter_status_dic[gene][tss_type] = promoter_status
+					promoter_dic[gene][tss_type] = promoter
+					if promoter_analysis == 'yes':
+						if os.path.exists(moods):
+							cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
+							motif_scores[gene][tss_type] = cumulative_promoter_motif_score
+							percentile_dic[gene][tss_type] = percentile_of_promoter_score
+							canonical_hits_dic[gene][tss_type] = canonical_hits
+						else:
+							print('MOODS not found. Promoter analysis not possible.')
 				results.update( { gene: result } )
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
-			distance = abs((results[gene]['TSS']) - atg_pos)  # distance between predicted TSS and upstream CDS start (+ gene)/ downstream CDS end (- gene)
-			"""
-			total_contribution = avg_cov_gene + distance + isoforms
-			coverage_score = (avg_cov_gene / total_contribution)  # contribution of coverage to total score
-			distance_score = 1 - (distance / total_contribution)  # contribution of distance to total score; 1 - is used since distance is inversely related to total score
-			isoform_score = 1 - (isoforms / total_contribution)  # contribution of no. of isoforms to total score; 1 - is used since no. of isoforms is inversely related to total score
-			TSS_confidence_score = (coverage_score * distance_score * isoform_score) ** (1 / 3) # confidence score is a geometric mean of the individual factor scores; each factor is independent of one another and must contribute well for the overal confidence making gemoetric mean and the multiplicative approach preferred over arithmetic mean and the additive approach
-			"""
+
 			isoforms_dic[gene]=isoforms
-			distance_dic[gene]=distance
 			coverage_dic[gene]=avg_cov_gene
 		except KeyError as e:
 			print(f"Missing gene error: {gene}, missing key: {e}")
 			traceback.print_exc()
-			"""
-			# If gene was added to results but confidence calculation failed, add fall back
-			if gene in results and gene not in confidence_score_dic:
-				confidence_score_dic[gene] = "NA"
-			"""
+
 	# --- report TSS in output file --- #
 	final_output_file = output_folder + "Results.tsv"
-	pos_strand_tss_neighbourhood_file = output_folder + "Positive_strand_gene_promoter_downstream_seqs.fasta"
-	neg_strand_tss_neighbourhood_file = output_folder + "Negative_strand_gene_promoter_downstream_seqs.fasta"
+	pos_strand_tss_neighbourhood_file = output_folder + "Positive_strand_gene_promoter_up_downstream_slice_seqs.fasta"
+	neg_strand_tss_neighbourhood_file = output_folder + "Negative_strand_gene_promoter_up_downstream_slice_seqs.fasta"
 	with open (pos_strand_tss_neighbourhood_file, 'w') as out:
-		for each in full_seq_pos_strand_gene:
-			out.write(f">{each}\n{full_seq_pos_strand_gene[each]}\n")
+		for gene, tss_type_dic in full_seq_pos_strand_gene.items():
+			for tss_type, seq in tss_type_dic.items():
+				out.write(f">{gene}_{tss_type}\n{seq}\n")
 	with open (neg_strand_tss_neighbourhood_file, 'w') as out:
-		for each in full_seq_neg_strand_gene:
-			out.write(f">{each}\n{full_seq_neg_strand_gene[each]}\n")
+		for gene, tss_type_dic in full_seq_neg_strand_gene.items():
+			for tss_type, seq in tss_type_dic.items():
+				out.write(f">{gene}_{tss_type}\n{seq}\n")
 	with open( final_output_file, "w" ) as out:
 		if promoter_analysis != 'yes':
 			out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
