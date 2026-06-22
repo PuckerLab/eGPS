@@ -3,7 +3,7 @@
 ### pucker@uni-bonn.de ###
 __version__ = "v0.1"
 
-__reference__ = "https://github.com/bpucker/TSS_finder"
+__reference__ = "https://github.com/bpucker/eGPS"
 
 __usage__ = """
 					TSS_finder """ + __version__ + """("""+ __reference__ +""")
@@ -56,14 +56,19 @@ import math
 import tempfile
 import traceback
 import numpy as np
+from scipy import stats
 from scipy.stats import percentileofscore
+import seaborn as sns
 from decimal import Decimal, ROUND_HALF_DOWN
+from scipy.interpolate import interp1d
 from collections import defaultdict
 try:
 	import matplotlib.pyplot as plt
 	from matplotlib.lines import Line2D
 	import matplotlib.ticker as ticker
 	from matplotlib.patches import FancyArrow
+	from statistics import mode
+	from copy import deepcopy
 except ImportError:
 	pass
 
@@ -369,38 +374,125 @@ def get_random_background_seqs(genome_seq, seq_len, background_strength):
 				background.append(random_seq)
 	return background
 
-def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
+#function to get intergenic background sequence coverages
+def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, intergenic_region_size, genes_per_chromosome, gene_infos):
+	intergenic_window_coverages = []
+	individual_pos_coverage = []
+	nonzero_positions = []
+
+	for contig in genes_per_chromosome:
+		coverage_lookup = dict(coverage_dic[contig])
+		gene_list = genes_per_chromosome[contig]
+		for i, gene in enumerate(gene_list):
+			if i + 1 >= len(gene_list):  #skip the last gene in the contig
+				break
+			next_gene = gene_list[i + 1]
+			intergenic_start = gene_infos[gene]['end']
+			intergenic_end = gene_infos[next_gene]['start']
+			full_intergenic_coverage_slice = [(pos, coverage_lookup[pos]) for pos in range(intergenic_start, intergenic_end + 1) if pos in coverage_lookup]
+			if len(full_intergenic_coverage_slice) > intergenic_buffer and len(full_intergenic_coverage_slice) > intergenic_region_size:
+				sliced_intergenic_coverage = full_intergenic_coverage_slice[intergenic_buffer:(len(full_intergenic_coverage_slice)-intergenic_buffer)]#leave a buffer near the gene regions for both the genes
+				chops = int(len(sliced_intergenic_coverage)/intergenic_region_size)#chop the intergenic region into bits of the same size so that a window of similar size can be compared in the sliding window strategy
+				# Trim to only the evenly divisible portion before chunking to avoid inclusion of partial final chunks
+				trimmed = sliced_intergenic_coverage[:chops * intergenic_region_size]
+				chop_start = 0
+				while chops > 0:
+					chop_region = trimmed[chop_start:chop_start+intergenic_region_size]
+					cumulative_coverage = sum(cov for _, cov in chop_region)
+					for pos, cov in chop_region:
+						individual_pos_coverage.append(cov)
+						if cov >0:
+							nonzero_positions.append(pos)
+					avg_intergenic_window_coverage = cumulative_coverage / len(chop_region)
+					if avg_intergenic_window_coverage != 0.0:#adding only non-zero average coverage values to the background noise
+						intergenic_window_coverages.append(avg_intergenic_window_coverage)
+					chop_start += intergenic_region_size
+					chops -= 1
+	# compute distances between consecutive nonzero positions
+	gaps = [nonzero_positions[i + 1] - nonzero_positions[i]
+			for i in range(len(nonzero_positions) - 1)]
+	print(f"Mean gap:   {np.mean(gaps):.1f}bp")
+	print(f"Median gap: {np.median(gaps):.1f}bp")
+	print(f"Std gap:    {np.std(gaps):.1f}bp")
+	modal_background_cov = mode(individual_pos_coverage)
+	print(f'Modal background coverage is {modal_background_cov}')
+	non_zero_cov_points = []
+	zero_cov_points = []
+	for each in individual_pos_coverage:
+		if each == 0:
+			zero_cov_points.append(each)
+		else:
+			non_zero_cov_points.append(each)
+	percent_zero = (len(zero_cov_points) / len(individual_pos_coverage))*100
+	percent_nonzero = (len(non_zero_cov_points) / len(individual_pos_coverage))*100
+	print(f"Percentage of intergenic positions with zero coverage is {percent_zero}")
+	print(f"Percentage of intergenic positions with nonzero coverage is {percent_nonzero}")
+	cov_arr = np.array(intergenic_window_coverages)
+	q1, q3 = np.percentile(cov_arr, [25, 75])
+	iqr = q3 - q1
+	print(f"IQR effect analysis with intergenic buffer of {intergenic_buffer}")
+	intergenic_window_coverages_wo_outliers = cov_arr[cov_arr <= q3 + 1.5*iqr]
+	print(f"Total intergenic windows:        {len(intergenic_window_coverages)}")
+	print(f"Windows after IQR filter:        {len(intergenic_window_coverages_wo_outliers)}")
+	print(f"Windows removed by IQR:          {len(intergenic_window_coverages) - len(intergenic_window_coverages_wo_outliers)}")
+	print(f"Retention rate:                  {100 * len(intergenic_window_coverages_wo_outliers) / len(intergenic_window_coverages):.1f}%")
+	intergenic_array = np.array(intergenic_window_coverages_wo_outliers)
+	percentile_99 = np.percentile(intergenic_array, 99)
+
+	#plotting the distribution of intergenic window coverages with outliers
+	plt.figure(figsize=(8,5))
+	sns.histplot(intergenic_window_coverages, kde=True)
+	plt.xlim(0, np.percentile(intergenic_window_coverages, 99))
+	plt.xlabel('Average_coverage')
+	plt.ylabel('Frequency')
+	plt.title('Distribution of average coverage values in intergenic region')
+	plt.tight_layout()
+	fig_save = os.path.join(outdir,'distribution_intergenic_with_outliers.png')
+	plt.savefig(fig_save, dpi=600)
+
+	# plotting the distribution of intergenic window coverages without outliers
+	plt.figure(figsize=(8, 5))
+	sns.histplot(intergenic_window_coverages_wo_outliers, kde=True)
+	plt.xlim(0, np.percentile(intergenic_window_coverages_wo_outliers, 99))
+	plt.xlabel('Average_coverage')
+	plt.xlabel('Average_coverage')
+	plt.ylabel('Frequency')
+	plt.title('Distribution of average coverage values in intergenic region')
+	plt.tight_layout()
+	fig_save = os.path.join(outdir, 'distribution_intergenic_without_outliers.png')
+	plt.savefig(fig_save, dpi=600)
+	z_ig = percent_zero / 100  # fraction of zero cov positions in the intergenic region
+	return intergenic_window_coverages_wo_outliers, z_ig, percent_zero, percent_nonzero
+
+def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
 	"""! @brief generate a coverage plot """
 	fig, (ax1, ax_features) = plt.subplots(2, 1, figsize=(10, 6), gridspec_kw={'height_ratios':[4,1]}, sharex=True)
 	ax1.plot(values, color="black", linestyle="solid")  # coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
 	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
-	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or rnd or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
-	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
+	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or end or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
+	if basal_tss_pos:
+		ax2.plot([basal_tss_pos, basal_tss_pos], [0, max(svalues + values)], color="brown", linestyle="dotted", label="Basal TSS")  # basal TSS position
+	if elevated_tss_pos:
+		ax2.plot([elevated_tss_pos, elevated_tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="Elevated TSS")  # elevated TSS position
+	if accelerated_tss_pos:
+		ax2.plot([accelerated_tss_pos, accelerated_tss_pos], [0, max(svalues + values)], color="pink", linestyle="dotted",label="Accelerated TSS")  # accelerated TSS position
 	ax2.legend(loc='best')
-	"""
-	# feature track plotting with features represented as rectangles
-	for mrna_start, mrna_end in mrnas_to_plot:
-		ax_features.broken_barh([(mrna_start, mrna_end - mrna_start)], (0.1, 0.2), facecolors='steelblue')
-	for cds_start, cds_end in cds_to_plot:
-		ax_features.broken_barh([(cds_start, cds_end - cds_start)], (0.4, 0.2), facecolors='lightgreen')
-	for five_utr_start, five_utr_end in mrnas_to_plot:
-		ax_features.broken_barh([(five_utr_start, five_utr_end - five_utr_start)], (0.7, 0.2), facecolors='salmon')
-	"""
+
 	# feature track plotting with features represented as arrows
 	for mrna_start, mrna_end in mrnas_to_plot:
 		feature_length = mrna_end - mrna_start
 		if orientation == '+':
 			dx = feature_length
 			x_origin = mrna_start
-			xdot_origin = tss_pos
-			predicted_tss_mrna_feature = mrna_end - tss_pos
+			xdot_origin = boundary_tss_for_plot
+			predicted_tss_mrna_feature = mrna_end - boundary_tss_for_plot
 		elif orientation == '-':
 			dx = -feature_length
 			x_origin = mrna_end
-			xdot_origin = tss_pos
-			predicted_tss_mrna_feature = -(tss_pos - mrna_start)
+			xdot_origin = boundary_tss_for_plot
+			predicted_tss_mrna_feature = -(boundary_tss_for_plot - mrna_start)
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
 		arrow = FancyArrow(x=x_origin, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='steelblue', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
@@ -422,13 +514,13 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 		if orientation == '+':
 			dx = feature_length
 			x_origin = five_utr_start
-			xdot_origin = tss_pos
-			predicted_tss_five_utr_feature = five_utr_end - tss_pos
+			xdot_origin = boundary_tss_for_plot
+			predicted_tss_five_utr_feature = five_utr_end - boundary_tss_for_plot
 		elif orientation == '-':
 			dx = -feature_length
 			x_origin = five_utr_end
-			xdot_origin = tss_pos
-			predicted_tss_five_utr_feature = -(tss_pos - five_utr_start)
+			xdot_origin = boundary_tss_for_plot
+			predicted_tss_five_utr_feature = -(boundary_tss_for_plot - five_utr_start)
 		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
 		arrow = FancyArrow(x=x_origin, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='salmon', alpha=0.5, edgecolor='black', linewidth=0.5)
 		ax_features.add_patch(arrow)
@@ -438,7 +530,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 	# extend vertical lines into feature axis
 	ax_features.axvline(atg_pos, color="green", linestyle="dotted")
 	ax_features.axvline(cov_walk_start, color="orange", linestyle="dotted")
-	ax_features.axvline(tss_pos, color="blue", linestyle="dotted")
+	ax_features.axvline(boundary_tss_for_plot, color="blue", linestyle="dotted")
 
 	ax1.set_title(gene + "   (" + orientation + ")")
 	ax_features.set_yticks([0.2, 0.5, 0.8])
@@ -448,80 +540,7 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, 
 	ax1.yaxis.label.set_color('black')
 	ax2.set_ylabel("Spanning RNA-seq coverage")
 	ax2.yaxis.label.set_color('red')
-	"""
-	#adaptive figure sizing based on coverage intervals and genomic range
-	genomic_range = genomic_end - genomic_start
-	fig_width = max(10, genomic_range / 100)  # 1 inch per 100 bp, minimum 10 inches
 
-	y_max = max(max(svalues + values), 1)
-	fig_height = max(5, y_max / 500)  # 1 inch per 500 coverage units, minimum 5 inches
-	
-	fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
-	ax1.plot( values, color="black", linestyle="solid" )	#coverage of aligned bases
-	ax2 = ax1.twinx()
-	ax2.plot( svalues, color="red", linestyle="dotted" )	#coverage of spanning reads
-	ax2.plot( [ atg_pos, atg_pos ], [ 0, max( svalues+values ) ], color="green", linestyle="dotted", label="ATG")	#ATG position
-	ax2.plot([tss_pos, tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="TSS")  # TSS position
-	ax2.legend()
-	
-	#replacing the above commented code block with the code block below to overlay with and display the nucleotide sequence on the plot
-	genomic_range = genomic_end - genomic_start
-	fig_width = max(10, genomic_range / 100)
-	y_max = max(max(svalues + values), 1)
-	fig_height = max(5, y_max / 500)
-
-	# base colors for sequence track
-	base_colors = {'A': '#2ecc71', 'T': '#e74c3c', 'G': '#3498db', 'C': '#f39c12',
-				   'a': '#2ecc71', 't': '#e74c3c', 'g': '#3498db', 'c': '#f39c12',
-				   'N': '#cccccc', 'n': '#cccccc'}
-
-	# two-panel layout: coverage on top (85%), sequence track on bottom (15%)
-	fig = plt.figure(figsize=(fig_width, fig_height + 1))
-	gs = fig.add_gridspec(2, 1, height_ratios=[0.85, 0.15], hspace=0.05)
-
-	ax1 = fig.add_subplot(gs[0])
-	ax_seq = fig.add_subplot(gs[1], sharex=ax1)  # shares x-axis with coverage plot
-
-	ax2 = ax1.twinx()
-	ax1.plot(values, color="black", linestyle="solid")
-	ax2.plot(svalues, color="red", linestyle="dotted")
-
-	y_max = max(max(svalues + values), 1)
-	ax2.plot([atg_pos, atg_pos], [0, y_max], color="green", linestyle="dotted", label="ATG")
-	ax2.plot([tss_pos, tss_pos], [0, y_max], color="blue", linestyle="dotted", label="TSS")
-	ax2.legend()
-
-	# --- sequence track ---
-	ax_seq.set_xlim(0, len(dna_sequence_for_plot))
-	ax_seq.set_ylim(0, 1)
-	ax_seq.axis('off')  # hide axes frame and ticks for sequence track
-
-	if genomic_range <= 300:
-		# show individual base letters with colored background rectangles
-		for i, base in enumerate(dna_sequence_for_plot):
-			color = base_colors.get(base, '#cccccc')
-			ax_seq.add_patch(plt.Rectangle((i, 0), 1, 1, color=color, alpha=0.6))
-			ax_seq.text(i + 0.5, 0.5, base.upper(), ha='center', va='center',
-						fontsize=max(4, min(8, fig_width / len(dna_sequence_for_plot) * 10)),
-						fontweight='bold', color='black')
-	else:
-		# show color strip only — no text since bases would be illegible
-		for i, base in enumerate(dna_sequence_for_plot):
-			color = base_colors.get(base, '#cccccc')
-			ax_seq.add_patch(plt.Rectangle((i, 0), 1, 1, color=color, alpha=0.8))
-		# add a compact legend for base colors
-		for base, color in [('A', '#2ecc71'), ('T', '#e74c3c'), ('G', '#3498db'), ('C', '#f39c12')]:
-			ax_seq.plot([], [], color=color, linewidth=6, label=base)
-		ax_seq.legend(loc='upper right', ncol=4, fontsize=7,
-					  framealpha=0.7, borderpad=0.3, handlelength=1)
-
-	ax1.set_title( gene + "   (" + orientation + ")" )
-	ax_seq.set_xlabel( "Position in genomic region from " + str( genomic_start ) + " to " + str( genomic_end ) )
-	ax1.set_ylabel( "Aligned RNA-seq coverage", labelpad=15 )
-	ax1.yaxis.label.set_color('black')
-	ax2.set_ylabel( "Spanning RNA-seq coverage", labelpad=15 )
-	ax2.yaxis.label.set_color('red')
-	"""
 	fig.savefig( fig_file, dpi=600, bbox_inches='tight' )
 	plt.close(fig)
 
@@ -563,45 +582,148 @@ def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_
 		return 'tail_into_neighbor'
 	return 'nested'
 
+#function to find the gene expression level of a gene of interest with respect to the background
+def find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene,intergenic_region_size,pvalue):
+	for contig in genes_per_chromosome:
+		if gene in genes_per_chromosome[contig]:
+			cov_dic = coverage_dic[contig]
+			break
+	coverage_lookup = dict(cov_dic)
+	passed_windows = 0
+	tot_windows = 0
+	if abs(end - start) > intergenic_region_size:
+		while start <= end - intergenic_region_size:
+			cumulative_coverage = 0
+			coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(start, start + intergenic_region_size) if pos in coverage_lookup]
+			for pos, cov in coverage_slice_list:
+				cumulative_coverage += cov
+			# calculating average coverage of the intergenic region
+			avg_coverage = float(cumulative_coverage / (len(coverage_slice_list)))
+			background_comparison = intergenic_window_coverages
+			hits = 0
+			for cov_value in background_comparison:
+				if cov_value >= avg_coverage:
+					hits += 1
+			psig = float(hits / len(background_comparison))
+			if psig < pvalue:
+				passed_windows+=1
+			tot_windows+=1
+			start +=1
+		percentage_passed_windows = (float(passed_windows) / float(tot_windows))*100
+		if percentage_passed_windows <= 10:
+			exp_status = 'low'
+		elif 10 < percentage_passed_windows <= 60:
+			exp_status = 'moderate'
+		elif  percentage_passed_windows > 60:
+			exp_status = 'high'
+	else:
+		exp_status = None
+	return exp_status
 
+#function to perform the kolmogorov smirnov test
+def do_ks_test(normalized_cumulative_sum_array):
+	cov_sum0 = normalized_cumulative_sum_array[0] #y0
+	cov_sum_max = max(normalized_cumulative_sum_array) #ymax
+	cov_len = normalized_cumulative_sum_array.size - 1 #xmax
+	slope = (cov_sum_max - cov_sum0) / cov_len #((ymax-y0)/xmax)
+	if slope == 0:
+		pval_ks = 1
+		diagonal_line_array = np.array([])
+	else:
+		diagonal_line_array = np.linspace(0, normalized_cumulative_sum_array.max(), normalized_cumulative_sum_array.size)#the uniform diagonal baseline with the ideal slope
+		stat_ks, pval_ks = stats.ks_2samp(normalized_cumulative_sum_array, diagonal_line_array)
+	return pval_ks, diagonal_line_array
 
-def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos ):
+#function to compute accelerated tss
+def get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead, coverage_slice_list_for_accelerated_tss,strand):
+	accelerated_tss = None
+	if len(coverage_slice_list_for_accelerated_tss) == 0:
+		accelerated_tss = None
+	else:
+		consecutive_cov_differences = np.insert(np.ediff1d(coverage_slice_list_for_accelerated_tss_arr), 0, 0)#impute the first value as 0 since the difference calculation reduces the length of the original array by 1
+		cumulative_sum_of_cov_diff = np.cumsum(np.abs(consecutive_cov_differences))
+		if cumulative_sum_of_cov_diff.max() == 0:
+			crs = np.array([])
+		else:
+			crs = cumulative_sum_of_cov_diff/cumulative_sum_of_cov_diff.max()
+			pval_ks, diagonal_line_array = do_ks_test(crs)
+			if pval_ks < 0.01:
+				print(f'KS test passed for {gene}. Searching for accelerated TSS.')
+				i=0
+				index_mean_dic={}
+				window_means=[]
+				while i <= (len(consecutive_cov_differences) - lookahead):
+					array_window = consecutive_cov_differences[i:i+lookahead]
+					mean_diff_per_window = np.mean(array_window)
+					index_mean_dic[i]=mean_diff_per_window
+					window_means.append(mean_diff_per_window)
+					i+=1
+
+				window_means_arr=np.array(window_means)
+				max_window_mean=np.max(window_means_arr)
+				for i in index_mean_dic:
+					if index_mean_dic[i] == max_window_mean:
+						selected_index=i
+						break
+				target_window_for_steepest_rise_point = np.array(consecutive_cov_differences[selected_index:selected_index+lookahead])
+				steepest_rise_point = np.max(target_window_for_steepest_rise_point)
+				consecutive_cov_differences_list = consecutive_cov_differences.tolist()
+				index_steepest_rise_point = consecutive_cov_differences_list.index(steepest_rise_point)
+				positions = np.array([pos for pos, cov in coverage_slice_list_for_accelerated_tss])
+				accelerated_tss = positions[index_steepest_rise_point]#the genomic position corresponding to the point of steepest increase
+	return accelerated_tss
+
+def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
+                     intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+                     cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
+                     hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
+                     genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
+                     gene_atg_dic, cds_infos):
 	"""! @brief run analysis on forward strand """
+
+	intron_boundary_marker = {}
 	most_upstream_pos = start
 	final_pos_status = False
 	while not final_pos_status:
-		
+
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_upstream_pos-2 ] >= mincov:	#index = genomic position -1 but coverage of gene that is next to the current position needs to be assessed before moving in there
-			most_upstream_pos -= 1	#move one step upstream
-			if most_upstream_pos == hard_cutoff:	#stop if end of upstream contig/pseudochromosome is reached
+		while cov_per_contig[most_upstream_pos - 2] >= mincov:  # index = genomic position -1 but coverage of gene that is next to the current position needs to be assessed before moving in there
+			most_upstream_pos -= 1  # move one step upstream
+			if most_upstream_pos == hard_cutoff:  # stop if end of upstream contig/pseudochromosome is reached
 				break
-		
+
 		# --- try to cross intron --- #
-		current_position = most_upstream_pos - 1	#most_upstream_pos has coverage above cutoff (position, not index!)
+		current_position = most_upstream_pos - 1  # most_upstream_pos has coverage above cutoff (position, not index!)
 		if current_position > hard_cutoff:
-			while cov_per_contig[ current_position - 2 ] < mincov:	#check if upstream position has low coverage
-				current_position -= 1	#move one step upstream
+			while cov_per_contig[current_position - 2] < mincov:  # check if upstream position has low coverage
+				current_position -= 1  # move one step upstream
 				if current_position == hard_cutoff:
 					break
 		else:
 			final_pos_status = True
-		
-		avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
-		#average coverage in intron should be very low
+
+		avg_gap_coverage = sum(scov_per_contig[current_position - 1:most_upstream_pos - 1]) / (most_upstream_pos - current_position)
+		# average coverage in intron should be very low
 		if current_position > min_exon_size and avg_gap_coverage > mincov:
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-			donor_splice_site = seq_per_contig[current_position-1:current_position+1].upper()	#this should be GT
-			acceptor_splice_site = seq_per_contig[most_upstream_pos-3:most_upstream_pos-1].upper()	#this should be AG
+			donor_splice_site = seq_per_contig[current_position - 1:current_position + 1].upper()  # this should be GT
+			acceptor_splice_site = seq_per_contig[
+				most_upstream_pos - 3:most_upstream_pos - 1].upper()  # this should be AG
 			if donor_splice_site == "GT" and acceptor_splice_site == "AG":
-				print( "donor splice site: " + donor_splice_site )
-				print( "acceptor splice site: " + acceptor_splice_site )
+				print("donor splice site: " + donor_splice_site)
+				print("acceptor splice site: " + acceptor_splice_site)
+				intron_start = current_position
+				intron_end = most_upstream_pos - 1
+				intron_boundary_marker[intron_start] = intron_end
 				most_upstream_pos = current_position - 1
 			elif donor_splice_site == "GC" and acceptor_splice_site == "AG":
-				print( "Non-canonical donor splice site: " + donor_splice_site )
-				print( "Non-canonical acceptor splice site: " + acceptor_splice_site )
+				print("Non-canonical donor splice site: " + donor_splice_site)
+				print("Non-canonical acceptor splice site: " + acceptor_splice_site)
+				intron_start = current_position
+				intron_end = most_upstream_pos - 1
+				intron_boundary_marker[intron_start] = intron_end
 				most_upstream_pos = current_position - 1
-			elif splicesites == "off":	#ignore check for canonical splice sites
+			elif splicesites == "off":  # ignore check for canonical splice sites
 				most_upstream_pos = current_position - 1
 			elif most_upstream_pos - current_position < tolerated_gap:
 				most_upstream_pos = current_position - 1
@@ -609,22 +731,155 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 				final_pos_status = True
 		else:
 			final_pos_status = True
-	print( "TSS position of " + gene + ": " + str( most_upstream_pos ) )
-	
+	print("TSS position of " + gene + ": " + str(most_upstream_pos))
+	walk_tss = most_upstream_pos
+	cov_dic = {}
+	# collect the intron positions as a set
+	intron_pos_set = set()
+	for intron_start_key, intron_end_val in intron_boundary_marker.items():
+		for p in range(intron_start_key, intron_end_val + 1):
+			intron_pos_set.add(p)  # collect every intronic position
+
+	# window sliding strategy to compare against background intergenic noise
+	window_pass = 0
+	basal_tss = None
+	elevated_tss = None
+	accelerated_tss = None
+
+	for contig in genes_per_chromosome:
+		if gene in genes_per_chromosome[contig]:
+			cov_dic = coverage_dic[contig]
+			break
+	coverage_lookup = dict(cov_dic)
+
+	window_starts = []
+	window_starts.append(most_upstream_pos)
+	while most_upstream_pos <= start:
+		coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, most_upstream_pos + intergenic_region_size) if pos in coverage_lookup]
+		cumulative_coverage = 0
+		# filter intron positions using pre-computed set
+		intron_free_coverage_slice_list = [
+			(pos, cov)
+			for pos, cov in coverage_slice_list
+			if pos not in intron_pos_set
+		]
+		# guard against fully intronic window
+		if len(intron_free_coverage_slice_list) == 0:
+			most_upstream_pos += slide_step
+			window_starts.append(most_upstream_pos)
+			continue
+		for pos, cov in intron_free_coverage_slice_list:
+			cumulative_coverage += cov
+		# calculating average coverage of the intergenic region
+		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
+
+		background_comparison = intergenic_window_coverages
+		hits = 0
+		for cov_value in background_comparison:
+			if cov_value >= avg_coverage:
+				hits += 1
+		psig = float(hits / len(background_comparison))
+		if psig < pvalue:
+			print(f'psig is {psig}')
+			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
+				print("No window sliding happened. TSS based on coverage walk only.")
+				elevated_tss = most_upstream_pos
+				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
+				coverage_slice_list_for_accelerated_tss_arr = np.array(
+					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+				accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+				tsr = 'NA'
+				break
+			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
+				first_most_upstream_pos = most_upstream_pos
+				window_pass_signal_strength = 0
+				window_pass_check = 0
+				while window_pass_check < strength:
+					most_upstream_pos = most_upstream_pos + slide_step
+					coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, most_upstream_pos + intergenic_region_size) if pos in coverage_lookup]
+					cumulative_coverage = 0
+					# filter intron positions using pre-computed set
+					intron_free_coverage_slice_list = [
+						(pos, cov)
+						for pos, cov in coverage_slice_list
+						if pos not in intron_pos_set
+					]
+					# guard against fully intronic window
+					if len(intron_free_coverage_slice_list) == 0:
+						most_upstream_pos += slide_step
+						window_starts.append(most_upstream_pos)
+						continue
+					for pos, cov in intron_free_coverage_slice_list:
+						cumulative_coverage += cov
+					# calculating average coverage of the intergenic region
+					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
+					hits = 0
+					for cov_value in background_comparison:
+						if cov_value >= avg_coverage:
+							hits += 1
+					psig = float(hits / len(background_comparison))
+					if psig < pvalue:
+						window_pass_signal_strength += 1
+					window_pass_check += 1
+				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
+					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(first_most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
+					coverage_slice_list_for_accelerated_tss_arr = np.array(
+						[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+					accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+					if slide_step == 1:
+						elevated_tss = first_most_upstream_pos
+						tsr = 'NA'
+					else:
+						if len(window_starts) > 1:
+							elevated_tss = first_most_upstream_pos
+							tsr = f'{window_starts[-2]} to {elevated_tss}'
+					break
+
+				else:  # if the three consecutive windows fail to show mean cov values, slide further to look at the next consecutive windows
+					window_pass += 1
+					# print(f'sliding window pass {window_pass}')
+					most_upstream_pos = most_upstream_pos + slide_step
+					window_starts.append(most_upstream_pos)
+					if most_upstream_pos > start:
+						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+						basal_tss = walk_tss
+						tsr = 'NA'
+						break
+
+		else:  # the walk-based TSS window is in the basal region and sliding window needs to be adopted to capture the elevated and accelerated TSS points (if any)
+			basal_tss = walk_tss
+			window_pass += 1
+			# print(f'sliding window pass {window_pass}')
+			most_upstream_pos = most_upstream_pos + slide_step
+			window_starts.append(most_upstream_pos)
+			if most_upstream_pos > start:
+				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+				basal_tss = walk_tss
+				tsr = 'NA'
+				break
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
+	tss_list = []
+	if basal_tss:
+		tss_list.append(basal_tss)
+	if elevated_tss:
+		tss_list.append(elevated_tss)
+	if accelerated_tss:
+		tss_list.append(accelerated_tss)
+	starting_tss_for_plot = min(tss_list)
+
 	transcript_list = transcripts_per_gene[gene]
 	mrna_dic = {}
-	cds_dic={}
-	five_utr_dic={}
+	cds_dic = {}
+	five_utr_dic = {}
 	for each in transcript_list:
 		if each in mrna_infos:
-			mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+			mrna_dic[each] = (mrna_infos[each]['start'], mrna_infos[each]['end'])
 		if each in cds_infos:
 			cds_dic[each] = cds_infos[each]
 		if each in five_utr_infos:
 			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
-	if most_upstream_pos > flank_region_for_plot:
-		plot_start_region = most_upstream_pos - flank_region_for_plot
+	if starting_tss_for_plot > flank_region_for_plot:
+		plot_start_region = starting_tss_for_plot - flank_region_for_plot
 	else:
 		plot_start_region = 0
 	plot_end_region = max(start + flank_region_for_plot, atg_genomic_pos + flank_region_for_plot)
@@ -632,93 +887,134 @@ def run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 	cds_to_plot = []
 	five_utr_to_plot = []
 	for transcript, (mrna_start, mrna_end) in mrna_dic.items():
-		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 				mrnas_to_plot.append(((mrna_start - plot_start_region), (mrna_end - plot_start_region)))
-			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 				mrnas_to_plot.append((0, (mrna_end - plot_start_region)))
-			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-				mrnas_to_plot.append(((mrna_start - plot_start_region),(plot_end_region - plot_start_region)))
-			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region), (plot_end_region - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				mrnas_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	for transcript, cds_list in cds_dic.items():
-		for (cds_start, cds_end) in cds_list:#two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
-			if cds_end >= plot_start_region and cds_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-				if cds_start >= plot_start_region and cds_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		for (cds_start,
+		     cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			if cds_end >= plot_start_region and cds_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+				if cds_start >= plot_start_region and cds_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
-				elif cds_start <= plot_start_region and cds_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				elif cds_start <= plot_start_region and cds_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 					cds_to_plot.append((0, (cds_end - plot_start_region)))
-				elif cds_start >= plot_start_region and cds_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-					cds_to_plot.append(((cds_start - plot_start_region),(plot_end_region - plot_start_region)))
-				elif cds_start <= plot_start_region and cds_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				elif cds_start >= plot_start_region and cds_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region), (plot_end_region - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
-		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
-			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region),(plot_end_region - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
 
-	values = cov_per_contig[ plot_start_region:plot_end_region ]
-	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
+	basal_tss_pos=None
+	elevated_tss_pos=None
+	accelerated_tss_pos=None
+	values = cov_per_contig[plot_start_region:plot_end_region]
+	svalues = scov_per_contig[plot_start_region:plot_end_region]
 	atg_pos = atg_genomic_pos - plot_start_region
-	tss_pos = most_upstream_pos - plot_start_region
+	if basal_tss:
+		basal_tss_pos = basal_tss - plot_start_region
+	if elevated_tss:
+		elevated_tss_pos = elevated_tss - plot_start_region
+	if accelerated_tss:
+		accelerated_tss_pos = accelerated_tss - plot_start_region
 	cov_walk_start = start - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "+"
-	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end+1]
+	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, starting_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
-		print( "ERROR: plot failed" + gene )
-		
-	return { 'TSS': most_upstream_pos, 'start': start, 'end': end }
+		print("ERROR: plot failed" + gene)
+
+	basal_tss_yr_compliant = False
+	elevated_tss_yr_compliant = False
+	accelerated_tss_yr_compliant = False
+
+	if basal_tss is not None:  # seq_per_contig slicing is 0-based while tss position is genomic index based. So seq_per_contig[basal_tss-1] is the base at TSS and seq_per_contig[basal_tss-2] is the base just preceding the TSS
+		if ((seq_per_contig[basal_tss - 2].upper() == 'T' or seq_per_contig[basal_tss - 2].upper() == 'C') and (seq_per_contig[basal_tss - 1].upper() == 'A' or seq_per_contig[basal_tss - 1].upper() == 'G')):
+			basal_tss_yr_compliant = True
+	else:
+		basal_tss_yr_compliant = 'NA'
+	if elevated_tss is not None:
+		if ((seq_per_contig[elevated_tss - 2].upper() == 'T' or seq_per_contig[elevated_tss - 2].upper() == 'C') and (seq_per_contig[elevated_tss - 1].upper() == 'A' or seq_per_contig[elevated_tss - 1].upper() == 'G')):
+			elevated_tss_yr_compliant = True
+	else:
+		elevated_tss_yr_compliant = 'NA'
+	if accelerated_tss is not None:
+		if ((seq_per_contig[accelerated_tss - 2].upper() == 'T' or seq_per_contig[accelerated_tss - 2].upper() == 'C') and (seq_per_contig[accelerated_tss - 1].upper() == 'A' or seq_per_contig[accelerated_tss - 1].upper() == 'G')):
+			accelerated_tss_yr_compliant = True
+	else:
+		accelerated_tss_yr_compliant = 'NA'
+
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant
 
 
-def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos ):
+def run_rev_analysis(strength, lookahead, output_folder, pvalue,
+                     intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+                     cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
+                     hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
+                     genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
+                     gene_atg_dic, cds_infos):
 	"""! @brief run analysis on reverse strand """
-	
+	intron_boundary_marker = {}
 	most_downstream_pos = end
 	final_pos_status = False
 	while not final_pos_status:
-		
+
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[ most_downstream_pos ] >= mincov:	#index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
-			most_downstream_pos += 1	#move one step downstream
-			if most_downstream_pos == hard_cutoff:	#stop if end of contig/pseudochromosome is reached
+		while cov_per_contig[
+			most_downstream_pos] >= mincov:  # index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
+			most_downstream_pos += 1  # move one step downstream
+			if most_downstream_pos == hard_cutoff:  # stop if end of contig/pseudochromosome is reached
 				break
-		
+
 		# --- try to cross intron --- #
-		current_position = most_downstream_pos + 1	#most_downstream_pos has coverage above cutoff (position, not index!)
+		current_position = most_downstream_pos + 1  # most_downstream_pos has coverage above cutoff (position, not index!)
 		if current_position < hard_cutoff:
-			while cov_per_contig[ current_position] < mincov:	#check if downstream position has low coverage
-				current_position += 1	#move one step downstream
+			while cov_per_contig[current_position] < mincov:  # check if downstream position has low coverage
+				current_position += 1  # move one step downstream
 				if current_position == hard_cutoff:
 					break
 		else:
 			final_pos_status = True
-		
-		avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos-1:current_position-1] )/( current_position-most_downstream_pos )
-		#average coverage in intron should be very low
-		if current_position < ( len( seq_per_contig ) - min_exon_size ) and avg_gap_coverage > mincov:
+
+		avg_gap_coverage = sum(scov_per_contig[most_downstream_pos - 1:current_position - 1]) / (current_position - most_downstream_pos)
+		# average coverage in intron should be very low
+		if current_position < (len(seq_per_contig) - min_exon_size) and avg_gap_coverage > mincov:
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-			acceptor_splice_site = seq_per_contig[most_downstream_pos-1:most_downstream_pos+1] # CT
-			donor_splice_site = seq_per_contig[current_position-3:current_position-1] # AC
-			if donor_splice_site == "AC" and acceptor_splice_site == "CT":	#reverse sequences of GT-AG
+			acceptor_splice_site = seq_per_contig[most_downstream_pos - 1:most_downstream_pos + 1]  # CT
+			donor_splice_site = seq_per_contig[current_position - 3:current_position - 1]  # AC
+			if donor_splice_site == "AC" and acceptor_splice_site == "CT":  # reverse sequences of GT-AG
 				print("donor splice site: " + donor_splice_site)
 				print("acceptor splice site: " + acceptor_splice_site)
+				intron_start = most_downstream_pos
+				intron_end = current_position - 1
+				intron_boundary_marker[intron_start] = intron_end
 				most_downstream_pos = current_position + 1
 			elif donor_splice_site == "GC" and acceptor_splice_site == "CT":
 				print("Non-canonical donor splice site: " + donor_splice_site)
 				print("Non-canonical acceptor splice site: " + acceptor_splice_site)
+				intron_start = most_downstream_pos
+				intron_end = current_position - 1
+				intron_boundary_marker[intron_start] = intron_end
 				most_downstream_pos = current_position + 1
-			elif splicesites == "off":	#ignore check for canonical splice sites
+			elif splicesites == "off":  # ignore check for canonical splice sites
 				most_downstream_pos = current_position + 1
 			elif current_position - most_downstream_pos < tolerated_gap:
 				most_downstream_pos = current_position + 1
@@ -726,77 +1022,243 @@ def run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, sta
 				final_pos_status = True
 		else:
 			final_pos_status = True
-	print( "TSS position of " + gene + ": " + str( most_downstream_pos ) )
+	print("TSS position of " + gene + ": " + str(most_downstream_pos))
+	walk_tss = most_downstream_pos
+
+	cov_dic = {}
+	# collect the intron positions as a set
+	intron_pos_set = set()
+	for intron_start_key, intron_end_val in intron_boundary_marker.items():
+		for p in range(intron_start_key, intron_end_val + 1):
+			intron_pos_set.add(p)  # collect every intronic position
+
+	# window sliding strategy to compare against background intergenic noise
+	window_pass = 0
+	basal_tss = None
+	elevated_tss = None
+	accelerated_tss = None
+	secondary_accelerated_tss = None
+	for contig in genes_per_chromosome:
+		if gene in genes_per_chromosome[contig]:
+			cov_dic = coverage_dic[contig]
+			break
+	coverage_lookup = dict(cov_dic)
+	coverage_lookup = dict(cov_dic)
+
+	window_starts = []
+	window_starts.append(most_downstream_pos)
+	while most_downstream_pos >= end:
+		coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos - intergenic_region_size, most_downstream_pos) if pos in coverage_lookup]
+		cumulative_coverage = 0
+		# filter intron positions using pre-computed set
+		intron_free_coverage_slice_list = [
+			(pos, cov)
+			for pos, cov in coverage_slice_list
+			if pos not in intron_pos_set
+		]
+		# guard against fully intronic window
+		if len(intron_free_coverage_slice_list) == 0:
+			most_downstream_pos -= slide_step
+			window_starts.append(most_downstream_pos)
+			continue
+		for pos, cov in intron_free_coverage_slice_list:
+			cumulative_coverage += cov
+		# calculating average coverage of the intergenic region
+		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
+
+		background_comparison = intergenic_window_coverages
+		hits = 0
+		for cov_value in background_comparison:
+			if cov_value >= avg_coverage:
+				hits += 1
+		psig = float(hits / len(background_comparison))
+		if psig < pvalue:
+			print(f'psig is {psig}')
+			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
+				print("No window sliding happened. TSS based on coverage walk only.")
+				elevated_tss = most_downstream_pos
+				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
+				coverage_slice_list_for_accelerated_tss_arr = np.array(
+					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+				accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+				tsr = 'NA'
+				break
+			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
+				first_most_downstream_pos = most_downstream_pos
+				window_pass_signal_strength = 0
+				window_pass_check = 0
+				while window_pass_check < strength:
+					most_downstream_pos = most_downstream_pos - slide_step
+					coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos - intergenic_region_size, most_downstream_pos) if pos in coverage_lookup]
+					cumulative_coverage = 0
+					# filter intron positions using pre-computed set
+					intron_free_coverage_slice_list = [
+						(pos, cov)
+						for pos, cov in coverage_slice_list
+						if pos not in intron_pos_set
+					]
+					# guard against fully intronic window
+					if len(intron_free_coverage_slice_list) == 0:
+						most_downstream_pos -= slide_step
+						window_starts.append(most_downstream_pos)
+						continue
+					for pos, cov in intron_free_coverage_slice_list:
+						cumulative_coverage += cov
+					# calculating average coverage of the intergenic region
+					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
+					hits = 0
+					for cov_value in background_comparison:
+						if cov_value >= avg_coverage:
+							hits += 1
+					psig = float(hits / len(background_comparison))
+					if psig < pvalue:
+						window_pass_signal_strength += 1
+					window_pass_check += 1
+				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
+					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
+					coverage_slice_list_for_accelerated_tss_arr = np.array([cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+					accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+					if slide_step == 1:
+						elevated_tss = first_most_downstream_pos
+						tsr = 'NA'
+					else:
+						if len(window_starts) > 1:
+							elevated_tss = first_most_downstream_pos
+							tsr = f'{window_starts[-2]} to {elevated_tss}'
+					break
+				else:
+					window_pass += 1
+					# print(f'sliding window pass {window_pass}')
+					most_downstream_pos = most_downstream_pos - slide_step
+					window_starts.append(most_downstream_pos)
+					if most_downstream_pos < end:
+						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+						basal_tss = walk_tss
+						tsr = 'NA'
+						break
+		else:
+			basal_tss = walk_tss
+			window_pass += 1
+			# print(f'sliding window pass {window_pass}')
+			most_downstream_pos = most_downstream_pos - slide_step
+			window_starts.append(most_downstream_pos)
+			if most_downstream_pos < end:
+				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+				basal_tss = walk_tss
+				tsr = 'NA'
+				break
 
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
+	tss_list = []
+	if basal_tss:
+		tss_list.append(basal_tss)
+	if elevated_tss:
+		tss_list.append(elevated_tss)
+	if accelerated_tss:
+		tss_list.append(accelerated_tss)
+	end_tss_for_plot = max(tss_list)
 	transcript_list = transcripts_per_gene[gene]
 	mrna_dic = {}
-	cds_dic={}
-	five_utr_dic={}
+	cds_dic = {}
+	five_utr_dic = {}
 	for each in transcript_list:
 		if each in mrna_infos:
-			mrna_dic[each]= (mrna_infos[each]['start'], mrna_infos[each]['end'])
+			mrna_dic[each] = (mrna_infos[each]['start'], mrna_infos[each]['end'])
 		if each in cds_infos:
 			cds_dic[each] = cds_infos[each]
 		if each in five_utr_infos:
 			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
 	plot_start_region = min(end - flank_region_for_plot, atg_genomic_pos - flank_region_for_plot)
-	if most_downstream_pos < ( len( seq_per_contig ) - flank_region_for_plot ):
-		plot_end_region = most_downstream_pos + flank_region_for_plot
+	if end_tss_for_plot < (len(seq_per_contig) - flank_region_for_plot):
+		plot_end_region = end_tss_for_plot + flank_region_for_plot
 	else:
-		plot_end_region = len( seq_per_contig )
+		plot_end_region = len(seq_per_contig)
 
 	mrnas_to_plot = []
 	cds_to_plot = []
 	five_utr_to_plot = []
 	for transcript, (mrna_start, mrna_end) in mrna_dic.items():
-		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		if mrna_end >= plot_start_region and mrna_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+			if mrna_start >= plot_start_region and mrna_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 				mrnas_to_plot.append(((mrna_start - plot_start_region), (mrna_end - plot_start_region)))
-			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+			elif mrna_start <= plot_start_region and mrna_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 				mrnas_to_plot.append((0, (mrna_end - plot_start_region)))
-			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-				mrnas_to_plot.append(((mrna_start - plot_start_region),(plot_end_region - plot_start_region)))
-			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+			elif mrna_start >= plot_start_region and mrna_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+				mrnas_to_plot.append(((mrna_start - plot_start_region), (plot_end_region - plot_start_region)))
+			elif mrna_start <= plot_start_region and mrna_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				mrnas_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	for transcript, cds_list in cds_dic.items():
-		for (cds_start, cds_end) in cds_list:#two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
-			if cds_end >= plot_start_region and cds_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-				if cds_start >= plot_start_region and cds_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		for (cds_start,
+		     cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			if cds_end >= plot_start_region and cds_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+				if cds_start >= plot_start_region and cds_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
-				elif cds_start <= plot_start_region and cds_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+				elif cds_start <= plot_start_region and cds_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 					cds_to_plot.append((0, (cds_end - plot_start_region)))
-				elif cds_start >= plot_start_region and cds_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-					cds_to_plot.append(((cds_start - plot_start_region),(plot_end_region - plot_start_region)))
-				elif cds_start <= plot_start_region and cds_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				elif cds_start >= plot_start_region and cds_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+					cds_to_plot.append(((cds_start - plot_start_region), (plot_end_region - plot_start_region)))
+				elif cds_start <= plot_start_region and cds_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
-		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:#primary check to see if feature is within the bounds of the plot
-			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:#case1 where feature is entirely within the plot bounds
+		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:#case2 where feature start is out of the plot bounds
+			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
 				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
-			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:#case3 where feature end is out of the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region),(plot_end_region - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:#case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
+			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
 
-	values = cov_per_contig[ plot_start_region:plot_end_region ]
-	svalues = scov_per_contig[ plot_start_region:plot_end_region ]
+	basal_tss_pos=None
+	elevated_tss_pos=None
+	accelerated_tss_pos=None
+	values = cov_per_contig[plot_start_region:plot_end_region]
+	svalues = scov_per_contig[plot_start_region:plot_end_region]
 	atg_pos = atg_genomic_pos - plot_start_region
-	tss_pos = most_downstream_pos - plot_start_region
+	if basal_tss:
+		basal_tss_pos = basal_tss - plot_start_region
+	if elevated_tss:
+		elevated_tss_pos = elevated_tss - plot_start_region
+	if accelerated_tss:
+		accelerated_tss_pos = accelerated_tss - plot_start_region
 	cov_walk_start = end - plot_start_region
 	genomic_start, genomic_end = plot_start_region, plot_end_region
 	orientation = "-"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, end_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
-		print( "ERROR: plot failed" + gene )
-		
-	return { 'TSS': most_downstream_pos, 'start': start, 'end': end }
+		print("ERROR: plot failed" + gene)
+
+	basal_tss_yr_compliant = False
+	elevated_tss_yr_compliant = False
+	accelerated_tss_yr_compliant = False
+	epd_tss_yr_compliant = False
+
+	if basal_tss is not None:  # seq_per_contig slicing is 0-based while tss position is genomic index based. Since this is the segment for reverse strand gene, the bases should follow reverse complementation. So seq_per_contig[basal_tss-1] is the base at TSS and seq_per_contig[basal_tss] is the base just succeeding the TSS
+		if ((seq_per_contig[basal_tss].upper() == 'A' or seq_per_contig[basal_tss].upper() == 'G') and (
+				seq_per_contig[basal_tss - 1].upper() == 'T' or seq_per_contig[basal_tss - 1].upper() == 'C')):
+			basal_tss_yr_compliant = True
+	else:
+		basal_tss_yr_compliant = 'NA'
+	if elevated_tss is not None:
+		if ((seq_per_contig[elevated_tss].upper() == 'A' or seq_per_contig[elevated_tss].upper() == 'G') and (
+				seq_per_contig[elevated_tss - 1].upper() == 'T' or seq_per_contig[elevated_tss - 1].upper() == 'C')):
+			elevated_tss_yr_compliant = True
+	else:
+		elevated_tss_yr_compliant = 'NA'
+	if accelerated_tss is not None:
+		if ((seq_per_contig[accelerated_tss].upper() == 'A' or seq_per_contig[accelerated_tss].upper() == 'G') and (
+				seq_per_contig[accelerated_tss - 1].upper() == 'T' or seq_per_contig[
+			accelerated_tss - 1].upper() == 'C')):
+			accelerated_tss_yr_compliant = True
+	else:
+		accelerated_tss_yr_compliant = 'NA'
+
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant
 
 
 def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
@@ -935,7 +1397,7 @@ def compute_background_moods_scores (background_seqs, pfm_config_dic, tmp_folder
 	return background_scores
 
 #function to scan extracted promoter sequences for user-specified promoter motif elements
-def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder, output_folder):
+def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation, promoter_seq, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder, output_folder):
 	tss_neighbourhood = os.path.join(output_folder,f'{gene}_tss_neighbourhood.png')
 	tss = result['TSS']
 	tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', dir=tmp_folder, delete=False)
@@ -1310,16 +1772,23 @@ def main( arguments ):
 		else:
 			numcols = 2
 
-	#p-value threshold for MOODS analysis
-	if '--pval' in arguments:
-		pvalue = float(arguments[arguments.index('--pval')+1])
+	#background percentage threshold for basal vs elevated transcription regions identification
+	if '--background_percentage' in arguments:
+		background_percentage = arguments[arguments.index('--background_percentage')+1]
 	else:
-		pvalue = 0.001
+		background_percentage = 0.05 #5% is default
 
-	if '--top_motif_hit' in arguments:
-		top_motifs = int(arguments[arguments.index('--top_motif_hit')+1])
+	#p-value for Kolmogorov SMirnov distribution fit test
+	if '--ks_pval' in arguments:
+		ks_pval = arguments[arguments.index('--ks_pval')+1]
 	else:
-		top_motifs = 1
+		ks_pval = 0.05
+
+	#p-value threshold for MOODS analysis
+	if '--moods_pval' in arguments:
+		pvalue = float(arguments[arguments.index('--moods_pval')+1])
+	else:
+		pvalue = 0.05
 
 	if '--coverage_walk_origin' in arguments: #cds or utr
 		coverage_walk_origin = arguments[arguments.index('--coverage_walk_origin')+1]
@@ -1335,6 +1804,42 @@ def main( arguments ):
 		downstream_slice = int(arguments[arguments.index('--downstream_slice')+1])
 	else:
 		downstream_slice = 50
+
+	#flag to fix the size of intergenic region, intron, exon tiles chosen as RNA-seq intergenic background units
+	if '--background_unit' in arguments:
+		intergenic_region_size = int(arguments[arguments.index('--background_unit')+1])
+	else:
+		intergenic_region_size = 10
+
+	#flag to trim bases from intron ends to avoid splice junctions from showing up in intron coverage analysis
+	if '--intron_trim' in arguments:
+		trim = int(arguments[arguments.index('--intron_trim')+1])
+	else:
+		trim = 5
+
+	#flag to fix the size of window sliding steps for comparing against intergenic background
+	if '--slide' in arguments:
+		slide_step = int(arguments[arguments.index('--slide')+1])
+	else:
+		slide_step = 1
+
+	#flag to determine the number of consecutive windows that must have mean cov values above the background
+	if '--signal_strength' in arguments:
+		strength = int(arguments[arguments.index('--strength')+1])
+	else:
+		strength = 3
+
+	#flag to determine the number of bases or positions to be looked ahead for determining the minima point accompanying the steepest positive transition in coverage
+	if '--lookahead' in arguments:
+		lookahead = int(arguments[arguments.index('--lookahead')+1])
+	else:
+		lookahead = 20
+
+	#flag to take a buffer region before slicing of the intergenic region to avoid read through signal interruptions from actual exonic regions
+	if '--buffer' in arguments:
+		intergenic_buffer = int(arguments[arguments.index('--buffer')+1])
+	else:
+		intergenic_buffer = 500
 
 	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
 	if run_mode == 'make_bam':
@@ -1492,9 +1997,24 @@ def main( arguments ):
 	# --- load data --- #
 	coverage = load_coverage( cov_file, input_mode )
 	scoverage = load_coverage( scov_file, input_mode )
-	
+
+	#obtain a dictionary with values being list of tuples of position and coverage per position per contig
+	coverage_dic = {}
+	with open(cov_file, 'r') as f:
+		line = f.readline()
+		while line:
+			parts = line.strip().split()
+			try:
+				coverage_dic[parts[0]].append((int(parts[1]), int(parts[2])))
+			except KeyError:
+				coverage_dic.update({parts[0]: [(int(parts[1]), int(parts[2]))]})
+			line = f.readline()
+
 	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
 	genome_seq, seq_counter = load_sequences( fasta_file )
+	print(f'Retrieving intergenic background seqs')
+	intergenic_window_coverages, z_ig, ig_percent_zero, ig_percent_nonzero = get_intergenic_background_seqs(output_folder, coverage_dic, intergenic_buffer, intergenic_region_size,genes_per_chromosome, gene_infos)
+	print(f'Completed retrieving intergenic noise seqs')
 	if promoter_analysis == 'yes':
 		print("Retrieving background seqs.")
 		background_seq_len = upstream_slice + downstream_slice
@@ -1505,6 +2025,10 @@ def main( arguments ):
 		print("Completed MOODS scoring of background seqs.")
 
 	# run analysis per gene of interest
+	gene_exp_status_dic = {}
+	inflection_dic = {}
+	candidate_tss_dic = {}
+	tss_compare_dic = {}
 	results = {}
 	motifs = []
 	motif_scores = {}
@@ -1515,7 +2039,7 @@ def main( arguments ):
 	tss_confidence_dic = {}
 	isoforms_dic = {}
 	distance_dic = {}
-	coverage_dic = {}
+	avg_coverage_dic = {}
 	five_utr_dic = {}
 	percentile_dic = {}
 	canonical_hits_dic = {}
@@ -1571,6 +2095,8 @@ def main( arguments ):
 					five_utr_dic[gene] = f"No CDS annotated. {gene} end used for TSS prediction."
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
 			avg_cov_gene = sum(cov_per_contig[start - 1:end]) / (end - (start - 1))  # get average coverage of the gene of interest for confidence thresholding
+			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene, intergenic_region_size, pvalue)
+			gene_exp_status_dic[gene] = gene_exp_status
 			#check if goi is an overlapping gene
 			#TSS-blocking overlap types
 			SKIP_TSS_TYPES = {'head_head', 'head_into_neighbor', 'same_strand', 'nested'}#'tail_tail' and 'tail_into_neighbor' overlap types are safe for TSS analysis
@@ -1597,6 +2123,9 @@ def main( arguments ):
 			if blocking_overlaps > 0:
 				print(f"{gene} has {blocking_overlaps} overlap(s). TSS analysis skipped.")
 				continue
+			if gene_exp_status == None or gene_exp_status == 'low':
+				print(f"{gene} shows lower expression level with respect to the background. TSS analysis skipped.")
+				continue
 			if orientation == "+":	#only works on forward strand
 				fig_file = output_folder + gene + ".png"
 				if upstream_gene:
@@ -1604,12 +2133,13 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
-				result = run_fwd_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( strength, lookahead, output_folder, pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
 				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
 				full_seq_pos_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder)
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
 						#motifs.append(best_motif_hits)
 						motif_scores[gene] = cumulative_promoter_motif_score
 						percentile_dic[gene] = percentile_of_promoter_score
@@ -1625,12 +2155,13 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
-				result = run_rev_analysis( gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( strength, lookahead, output_folder ,pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
 				promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
 				full_seq_neg_strand_gene[gene] = full_seq
 				if promoter_analysis == 'yes':
 					if os.path.exists(moods):
-						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, top_motifs, pfm_config_dic, tmp_folder,output_folder)
+						cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, result, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
 						motif_scores[gene] = cumulative_promoter_motif_score
 						percentile_dic[gene] = percentile_of_promoter_score
 						canonical_hits_dic[gene] = canonical_hits
