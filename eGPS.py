@@ -635,7 +635,7 @@ def do_ks_test(normalized_cumulative_sum_array):
 	return pval_ks, diagonal_line_array
 
 #function to compute accelerated tss
-def get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead, coverage_slice_list_for_accelerated_tss,strand):
+def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead, coverage_slice_list_for_accelerated_tss,strand):
 	accelerated_tss = None
 	if len(coverage_slice_list_for_accelerated_tss) == 0:
 		accelerated_tss = None
@@ -647,7 +647,7 @@ def get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, looka
 		else:
 			crs = cumulative_sum_of_cov_diff/cumulative_sum_of_cov_diff.max()
 			pval_ks, diagonal_line_array = do_ks_test(crs)
-			if pval_ks < 0.01:
+			if pval_ks < ks_pval_threshold:
 				print(f'KS test passed for {gene}. Searching for accelerated TSS.')
 				i=0
 				index_mean_dic={}
@@ -673,12 +673,12 @@ def get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, looka
 				accelerated_tss = positions[index_steepest_rise_point]#the genomic position corresponding to the point of steepest increase
 	return accelerated_tss
 
-def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
-                     intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
-                     cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
-                     hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
-                     genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-                     gene_atg_dic, cds_infos):
+def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
+					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
+					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
+					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
+					 gene_atg_dic, cds_infos):
 	"""! @brief run analysis on forward strand """
 
 	intron_boundary_marker = {}
@@ -787,7 +787,7 @@ def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
 				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
 				coverage_slice_list_for_accelerated_tss_arr = np.array(
 					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
-				accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
 				tsr = 'NA'
 				break
 			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
@@ -825,7 +825,7 @@ def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
 					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(first_most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
 					coverage_slice_list_for_accelerated_tss_arr = np.array(
 						[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
-					accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
 					if slide_step == 1:
 						elevated_tss = first_most_upstream_pos
 						tsr = 'NA'
@@ -899,7 +899,7 @@ def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
 
 	for transcript, cds_list in cds_dic.items():
 		for (cds_start,
-		     cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			 cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
 			if cds_end >= plot_start_region and cds_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
 				if cds_start >= plot_start_region and cds_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
@@ -965,12 +965,12 @@ def run_fwd_analysis(strength, lookahead, output_folder, pvalue,
 	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant
 
 
-def run_rev_analysis(strength, lookahead, output_folder, pvalue,
-                     intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
-                     cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
-                     hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
-                     genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-                     gene_atg_dic, cds_infos):
+def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
+					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
+					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
+					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
+					 gene_atg_dic, cds_infos):
 	"""! @brief run analysis on reverse strand """
 	intron_boundary_marker = {}
 	most_downstream_pos = end
@@ -1080,7 +1080,7 @@ def run_rev_analysis(strength, lookahead, output_folder, pvalue,
 				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
 				coverage_slice_list_for_accelerated_tss_arr = np.array(
 					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
-				accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
 				tsr = 'NA'
 				break
 			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
@@ -1117,7 +1117,7 @@ def run_rev_analysis(strength, lookahead, output_folder, pvalue,
 				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
 					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
 					coverage_slice_list_for_accelerated_tss_arr = np.array([cov for pos, cov in coverage_slice_list_for_accelerated_tss])
-					accelerated_tss = get_accelerated_tss(gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
 					if slide_step == 1:
 						elevated_tss = first_most_downstream_pos
 						tsr = 'NA'
@@ -1190,7 +1190,7 @@ def run_rev_analysis(strength, lookahead, output_folder, pvalue,
 
 	for transcript, cds_list in cds_dic.items():
 		for (cds_start,
-		     cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+			 cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
 			if cds_end >= plot_start_region and cds_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
 				if cds_start >= plot_start_region and cds_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
@@ -1703,7 +1703,7 @@ def main( arguments ):
 		downstream_size = arguments[arguments.index('--downstream_size')+1]
 	else:
 		downstream_size = 300
-
+	#flag for determining background strength for promoter motif random background seq retrieval
 	if '--background' in arguments:
 		background_strength = int(arguments[arguments.index('--background')+1])
 	else:
@@ -1772,13 +1772,13 @@ def main( arguments ):
 
 	#background percentage threshold for basal vs elevated transcription regions identification
 	if '--background_percentage' in arguments:
-		background_percentage = arguments[arguments.index('--background_percentage')+1]
+		background_percentage = float(arguments[arguments.index('--background_percentage')+1])
 	else:
 		background_percentage = 0.05 #5% is default
 
-	#p-value for Kolmogorov SMirnov distribution fit test
+	#p-value for Kolmogorov Smirnov distribution fit test
 	if '--ks_pval' in arguments:
-		ks_pval = arguments[arguments.index('--ks_pval')+1]
+		ks_pval = float(arguments[arguments.index('--ks_pval')+1])
 	else:
 		ks_pval = 0.05
 
@@ -2095,7 +2095,7 @@ def main( arguments ):
 					five_utr_dic[gene] = f"No CDS annotated. {gene} end used for TSS prediction."
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
 			avg_cov_gene = sum(cov_per_contig[start - 1:end]) / (end - (start - 1))  # get average coverage of the gene of interest for confidence thresholding
-			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene, intergenic_region_size, pvalue)
+			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene, intergenic_region_size, background_percentage)
 			gene_exp_status_dic[gene] = gene_exp_status
 			#check if goi is an overlapping gene
 			#TSS-blocking overlap types
@@ -2133,15 +2133,21 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( strength, lookahead, output_folder, pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
 				tss_list = {}
 				if basal_tss:
-					tss_list['basal']=basal_tss
+					tss_list['basal'] = basal_tss
+				else:
+					tss_list['basal'] = None
 				if elevated_tss:
-					tss_list['elevated']=elevated_tss
+					tss_list['elevated'] = elevated_tss
+				else:
+					tss_list['elevated'] = None
 				if accelerated_tss:
-					tss_list['accelerated']=accelerated_tss
+					tss_list['accelerated'] = accelerated_tss
+				else:
+					tss_list['accelerated'] = None
 				full_seq_pos_strand_gene[gene]={}
 				promoter_status_dic[gene] = {}
 				promoter_dic[gene] = {}
@@ -2149,18 +2155,27 @@ def main( arguments ):
 				percentile_dic[gene] = {}
 				canonical_hits_dic[gene] = {}
 				for tss_type in tss_list:
-					promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
-					full_seq_pos_strand_gene[gene][tss_type] = full_seq
-					promoter_status_dic[gene][tss_type] = promoter_status
-					promoter_dic[gene][tss_type] = promoter
-					if promoter_analysis == 'yes':
-						if os.path.exists(moods):
-							cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
-							motif_scores[gene][tss_type] = cumulative_promoter_motif_score
-							percentile_dic[gene][tss_type] = percentile_of_promoter_score
-							canonical_hits_dic[gene][tss_type] = canonical_hits
-						else:
-							print('MOODS not found. Promoter analysis not possible.')
+					if tss_list[tss_type]:
+						promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+						full_seq_pos_strand_gene[gene][tss_type] = full_seq
+						promoter_status_dic[gene][tss_type] = promoter_status
+						promoter_dic[gene][tss_type] = promoter
+						if promoter_analysis == 'yes':
+							if os.path.exists(moods):
+								cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
+								motif_scores[gene][tss_type] = cumulative_promoter_motif_score
+								percentile_dic[gene][tss_type] = percentile_of_promoter_score
+								canonical_hits_dic[gene][tss_type] = canonical_hits
+							else:
+								print('MOODS not found. Promoter analysis not possible.')
+					else:
+						full_seq_pos_strand_gene[gene][tss_type] = None
+						promoter_status_dic[gene][tss_type] = None
+						promoter_dic[gene][tss_type] = None
+						if promoter_analysis == 'yes':
+							motif_scores[gene][tss_type] = None
+							percentile_dic[gene][tss_type] = None
+							canonical_hits_dic[gene][tss_type] = None
 				results.update( { gene: result } )
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
@@ -2168,34 +2183,49 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( strength, lookahead, output_folder ,pvalue, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
 				tss_list = {}
 				if basal_tss:
 					tss_list['basal'] = basal_tss
+				else:
+					tss_list['basal'] = None
 				if elevated_tss:
 					tss_list['elevated'] = elevated_tss
+				else:
+					tss_list['elevated'] = None
 				if accelerated_tss:
 					tss_list['accelerated'] = accelerated_tss
-				full_seq_pos_strand_gene[gene] = {}
+				else:
+					tss_list['accelerated'] = None
+				full_seq_neg_strand_gene[gene] = {}
 				promoter_status_dic[gene] = {}
 				promoter_dic[gene] = {}
 				motif_scores[gene] = {}
 				percentile_dic[gene] = {}
 				canonical_hits_dic[gene] = {}
 				for tss_type in tss_list:
-					promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
-					full_seq_pos_strand_gene[gene][tss_type] = full_seq
-					promoter_status_dic[gene][tss_type] = promoter_status
-					promoter_dic[gene][tss_type] = promoter
-					if promoter_analysis == 'yes':
-						if os.path.exists(moods):
-							cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
-							motif_scores[gene][tss_type] = cumulative_promoter_motif_score
-							percentile_dic[gene][tss_type] = percentile_of_promoter_score
-							canonical_hits_dic[gene][tss_type] = canonical_hits
-						else:
-							print('MOODS not found. Promoter analysis not possible.')
+					if tss_list[tss_type]:
+						promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
+						full_seq_neg_strand_gene[gene][tss_type] = full_seq
+						promoter_status_dic[gene][tss_type] = promoter_status
+						promoter_dic[gene][tss_type] = promoter
+						if promoter_analysis == 'yes':
+							if os.path.exists(moods):
+								cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits = promoter_motif_analysis(numcols, upstream_slice, downstream_slice, bg_scores, tss_list[tss_type], tss_type, gene, orientation,promoter, downstream_to_tss, moods, pvalue, pfm_config_dic, tmp_folder,output_folder)
+								motif_scores[gene][tss_type] = cumulative_promoter_motif_score
+								percentile_dic[gene][tss_type] = percentile_of_promoter_score
+								canonical_hits_dic[gene][tss_type] = canonical_hits
+							else:
+								print('MOODS not found. Promoter analysis not possible.')
+					else:
+						full_seq_neg_strand_gene[gene][tss_type] = None
+						promoter_status_dic[gene][tss_type] = None
+						promoter_dic[gene][tss_type] = None
+						if promoter_analysis == 'yes':
+							motif_scores[gene][tss_type] = None
+							percentile_dic[gene][tss_type] = None
+							canonical_hits_dic[gene][tss_type] = None
 				results.update( { gene: result } )
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
@@ -2219,37 +2249,52 @@ def main( arguments ):
 			for tss_type, seq in tss_type_dic.items():
 				out.write(f">{gene}_{tss_type}\n{seq}\n")
 	with open( final_output_file, "w" ) as out:
+		out.write("\t".join(
+			["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
+			 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS",
+			 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance",
+			 "Promoter status", "Promoter sequence","Additional comments"]) + "\n")
+		for gene in list(results.keys()):
+			final_results = []
+			if gene in results:
+				final_results.extend[gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
+				str({tss_compare_dic[gene][0]}), str({tss_compare_dic[gene][1]}), str({tss_compare_dic[gene][2]}), str({tss_compare_dic[gene][3]}),
+				str({tss_compare_dic[gene][4]}), str({tss_compare_dic[gene][5]}), str({tss_compare_dic[gene][6]})]
+				for main_gene, tss_type_dic in promoter_status_dic.items():
+					if main_gene == gene:
+						for tss_type, status in tss_type_dic.items():
+							final_results.extend([status])
+					break
+				for main_gene, tss_type_dic in promoter_dic.items():
+					if main_gene == gene:
+						for tss_type, seq in tss_type_dic.items():
+							final_results.extend([seq])
+					break
+				final_results.extend(str(five_utr_dic[gene]))
+				out.write("\t".join(final_results) + "\n")
 		if promoter_analysis != 'yes':
-			out.write( "\t".join( [ "GeneID", "TSS", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
-			for gene in list( results.keys() ):
-				out.write( "\t".join( [ 	gene,
-													str( results[ gene ]['TSS'] ),
-													str(coverage_dic[gene]),
-													str(isoforms_dic[gene]),
-													str( results[ gene ]['start'] ),
-													str( results[ gene ]['end'] ),
-													str( results[ gene ]['promoter_status'] ),
-													str( results[ gene ]['promoter'] ),
-													str(five_utr_dic[gene])
-											] ) + "\n" )
-		elif promoter_analysis == 'yes':
-			out.write( "\t".join( [ "GeneID", "TSS", "Promoter motif score", "Promoter motif percentile", "Canonical motif hits", "Average gene coverage", "Number of isoforms", "Start", "End", "PromoterStatus", "Promoter", "Additional comments" ] ) + "\n" )
-			for gene in list( results.keys() ):
-				if gene in results:
-					out.write( "\t".join( [ 	gene,
-														str( results[ gene ]['TSS'] ),
-														str(motif_scores[gene]),
-														str(percentile_dic[gene]),
-														str(canonical_hits_dic[gene]),
-														str(coverage_dic[gene]),
-														str(isoforms_dic[gene]),
-														str( results[ gene ]['start'] ),
-														str( results[ gene ]['end'] ),
-														str( results[ gene ]['promoter_status'] ),
-														str( results[ gene ]['promoter'] ),
-														str(five_utr_dic[gene])
-												] ) + "\n" )
-
+			out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",
+									"Basal promoter motif score percentile", "Elevated promoter motif score percentile", "Accelerated promoter motif score percentile",
+									"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",]))
+			for main_gene in list( results.keys() ):
+				final_results = []
+				if main_gene in results:
+					for gene, tss_type_dic in motif_scores.items():
+						if gene == main_gene:
+							for tss_type, score in tss_type_dic.items():
+								final_results.extend([score])
+						break
+					for gene, tss_type_dic in percentile_dic.items():
+						if gene == main_gene:
+							for tss_type, percentile in tss_type_dic.items():
+								final_results.extend([percentile])
+						break
+					for gene, tss_type_dic in canonical_hits_dic.items():
+						if gene == main_gene:
+							for tss_type, canonical_hits in tss_type_dic.items():
+								final_results.extend([canonical_hits])
+						break
+				out.write("\t".join(final_results) + "\n")
 
 if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
 	main( sys.argv )
