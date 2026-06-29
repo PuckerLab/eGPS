@@ -2237,7 +2237,8 @@ def main( arguments ):
 			traceback.print_exc()
 
 	# --- report TSS in output file --- #
-	final_output_file = output_folder + "Results.tsv"
+	final_output_file = os.apth.join(output_folder, "Results.tsv")
+	final_promoter_analysis_file = os.path.join(output_folder, "Promoter_analysis_results.tsv")
 	pos_strand_tss_neighbourhood_file = output_folder + "Positive_strand_gene_promoter_up_downstream_slice_seqs.fasta"
 	neg_strand_tss_neighbourhood_file = output_folder + "Negative_strand_gene_promoter_up_downstream_slice_seqs.fasta"
 	with open (pos_strand_tss_neighbourhood_file, 'w') as out:
@@ -2272,7 +2273,8 @@ def main( arguments ):
 					break
 				final_results.extend(str(five_utr_dic[gene]))
 				out.write("\t".join(final_results) + "\n")
-		if promoter_analysis != 'yes':
+	if promoter_analysis == 'yes':
+		with open (final_promoter_analysis_file, 'w') as out:
 			out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",
 									"Basal promoter motif score percentile", "Elevated promoter motif score percentile", "Accelerated promoter motif score percentile",
 									"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",]))
