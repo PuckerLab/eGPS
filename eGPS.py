@@ -660,17 +660,18 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 					i+=1
 
 				window_means_arr=np.array(window_means)
-				max_window_mean=np.max(window_means_arr)
-				for i in index_mean_dic:
-					if index_mean_dic[i] == max_window_mean:
-						selected_index=i
-						break
-				target_window_for_steepest_rise_point = np.array(consecutive_cov_differences[selected_index:selected_index+lookahead])
-				steepest_rise_point = np.max(target_window_for_steepest_rise_point)
-				consecutive_cov_differences_list = consecutive_cov_differences.tolist()
-				index_steepest_rise_point = consecutive_cov_differences_list.index(steepest_rise_point)
-				positions = np.array([pos for pos, cov in coverage_slice_list_for_accelerated_tss])
-				accelerated_tss = positions[index_steepest_rise_point]#the genomic position corresponding to the point of steepest increase
+				if window_means_arr.size > 0:#if (len(consecutive_cov_differences) - lookahead) < 0 then window_means_arr turns out empty. this could happen for cases wherein the elevated tss is already close to the ATG. So skip accelerated TSS detection for such cases.
+					max_window_mean=np.max(window_means_arr)
+					for i in index_mean_dic:
+						if index_mean_dic[i] == max_window_mean:
+							selected_index=i
+							break
+					target_window_for_steepest_rise_point = np.array(consecutive_cov_differences[selected_index:selected_index+lookahead])
+					steepest_rise_point = np.max(target_window_for_steepest_rise_point)
+					consecutive_cov_differences_list = consecutive_cov_differences.tolist()
+					index_steepest_rise_point = consecutive_cov_differences_list.index(steepest_rise_point)
+					positions = np.array([pos for pos, cov in coverage_slice_list_for_accelerated_tss])
+					accelerated_tss = positions[index_steepest_rise_point]#the genomic position corresponding to the point of steepest increase
 	return accelerated_tss
 
 def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
@@ -2237,7 +2238,7 @@ def main( arguments ):
 			traceback.print_exc()
 
 	# --- report TSS in output file --- #
-	final_output_file = os.apth.join(output_folder, "Results.tsv")
+	final_output_file = os.path.join(output_folder, "Results.tsv")
 	final_promoter_analysis_file = os.path.join(output_folder, "Promoter_analysis_results.tsv")
 	pos_strand_tss_neighbourhood_file = output_folder + "Positive_strand_gene_promoter_up_downstream_slice_seqs.fasta"
 	neg_strand_tss_neighbourhood_file = output_folder + "Negative_strand_gene_promoter_up_downstream_slice_seqs.fasta"
