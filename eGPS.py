@@ -9,7 +9,7 @@ __usage__ = """
 					TSS_finder """ + __version__ + """("""+ __reference__ +""")
 					
 					Usage:
-					python3 TSS_finder.py
+					python3 eGPS.py
 					--fasta <GENOMIC_FASTA_FILE>
 					--gff <GFF_FILE>
 					--goi <TXT_FILE_WITH_LIST_OF_GENES_OF_INTEREST_ONE_PER_LINE>
@@ -472,11 +472,11 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_
 	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
 	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
 	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or end or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
-	if basal_tss_pos:
+	if basal_tss_pos is not None:
 		ax2.plot([basal_tss_pos, basal_tss_pos], [0, max(svalues + values)], color="brown", linestyle="dotted", label="Basal TSS")  # basal TSS position
-	if elevated_tss_pos:
+	if elevated_tss_pos is not None:
 		ax2.plot([elevated_tss_pos, elevated_tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="Elevated TSS")  # elevated TSS position
-	if accelerated_tss_pos:
+	if accelerated_tss_pos is not None:
 		ax2.plot([accelerated_tss_pos, accelerated_tss_pos], [0, max(svalues + values)], color="pink", linestyle="dotted",label="Accelerated TSS")  # accelerated TSS position
 	ax2.legend(loc='best')
 
@@ -530,7 +530,14 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_
 	# extend vertical lines into feature axis
 	ax_features.axvline(atg_pos, color="green", linestyle="dotted")
 	ax_features.axvline(cov_walk_start, color="orange", linestyle="dotted")
-	ax_features.axvline(boundary_tss_for_plot, color="blue", linestyle="dotted")
+	colour = 'black'
+	if boundary_tss_for_plot == basal_tss_pos:
+		colour = 'brown'
+	elif boundary_tss_for_plot == elevated_tss_pos:
+		colour = 'blue'
+	elif boundary_tss_for_plot == accelerated_tss_pos:
+		colour = 'pink'
+	ax_features.axvline(boundary_tss_for_plot, color=colour, linestyle="dotted")
 
 	ax1.set_title(gene + "   (" + orientation + ")")
 	ax_features.set_yticks([0.2, 0.5, 0.8])
@@ -921,7 +928,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
 			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
-
+	boundary_tss_for_plot = starting_tss_for_plot - plot_start_region
 	basal_tss_pos=None
 	elevated_tss_pos=None
 	accelerated_tss_pos=None
@@ -939,7 +946,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	orientation = "+"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, starting_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
 
@@ -1212,7 +1219,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
 			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
-
+	boundary_tss_for_plot = end_tss_for_plot - plot_start_region
 	basal_tss_pos=None
 	elevated_tss_pos=None
 	accelerated_tss_pos=None
@@ -1230,7 +1237,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	orientation = "-"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, end_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
 
@@ -1781,13 +1788,13 @@ def main( arguments ):
 	if '--ks_pval' in arguments:
 		ks_pval = float(arguments[arguments.index('--ks_pval')+1])
 	else:
-		ks_pval = 0.05
+		ks_pval = 0.01
 
 	#p-value threshold for MOODS analysis
 	if '--moods_pval' in arguments:
 		pvalue = float(arguments[arguments.index('--moods_pval')+1])
 	else:
-		pvalue = 0.05
+		pvalue = 0.01
 
 	if '--coverage_walk_origin' in arguments: #cds or utr
 		coverage_walk_origin = arguments[arguments.index('--coverage_walk_origin')+1]
@@ -2135,7 +2142,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
+				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
 				tss_list = {}
 				if basal_tss:
 					tss_list['basal'] = basal_tss
@@ -2185,7 +2192,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
-				tss_compare_dic[gene] = (walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant)
+				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
 				tss_list = {}
 				if basal_tss:
 					tss_list['basal'] = basal_tss
@@ -2245,35 +2252,36 @@ def main( arguments ):
 	with open (pos_strand_tss_neighbourhood_file, 'w') as out:
 		for gene, tss_type_dic in full_seq_pos_strand_gene.items():
 			for tss_type, seq in tss_type_dic.items():
-				out.write(f">{gene}_{tss_type}\n{seq}\n")
+				if seq is not None:
+					out.write(f">{gene}_{tss_type}\n{seq}\n")
 	with open (neg_strand_tss_neighbourhood_file, 'w') as out:
 		for gene, tss_type_dic in full_seq_neg_strand_gene.items():
 			for tss_type, seq in tss_type_dic.items():
-				out.write(f">{gene}_{tss_type}\n{seq}\n")
+				if seq is not None:
+					out.write(f">{gene}_{tss_type}\n{seq}\n")
 	with open( final_output_file, "w" ) as out:
 		out.write("\t".join(
 			["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
 			 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS",
 			 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance",
-			 "Promoter status", "Promoter sequence","Additional comments"]) + "\n")
+			 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",
+			 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",
+			 "Additional comments"]) + "\n")
 		for gene in list(results.keys()):
 			final_results = []
 			if gene in results:
-				final_results.extend[gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
-				str({tss_compare_dic[gene][0]}), str({tss_compare_dic[gene][1]}), str({tss_compare_dic[gene][2]}), str({tss_compare_dic[gene][3]}),
-				str({tss_compare_dic[gene][4]}), str({tss_compare_dic[gene][5]}), str({tss_compare_dic[gene][6]})]
-				for main_gene, tss_type_dic in promoter_status_dic.items():
-					if main_gene == gene:
-						for tss_type, status in tss_type_dic.items():
-							final_results.extend([status])
-					break
-				for main_gene, tss_type_dic in promoter_dic.items():
-					if main_gene == gene:
-						for tss_type, seq in tss_type_dic.items():
-							final_results.extend([seq])
-					break
-				final_results.extend(str(five_utr_dic[gene]))
-				out.write("\t".join(final_results) + "\n")
+				final_results.extend([gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
+				str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
+				str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][6])])
+				if gene in promoter_status_dic:
+					for tss_type, status in promoter_status_dic[gene].items():
+						final_results.append(str(status))
+
+				if gene in promoter_dic:
+					for tss_type, seq in promoter_dic[gene].items():
+						final_results.append(str(seq))
+				final_results.append(str(five_utr_dic[gene]))
+				out.write("\t".join(str(x) for x in final_results) + "\n")#explicitly converting every result entry into string to avoid boolean value errors
 	if promoter_analysis == 'yes':
 		with open (final_promoter_analysis_file, 'w') as out:
 			out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",
@@ -2281,23 +2289,23 @@ def main( arguments ):
 									"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",]))
 			for main_gene in list( results.keys() ):
 				final_results = []
-				if main_gene in results:
-					for gene, tss_type_dic in motif_scores.items():
-						if gene == main_gene:
-							for tss_type, score in tss_type_dic.items():
-								final_results.extend([score])
+				print('entering main loop to write promoter analysis results')
+				for gene, tss_type_dic in motif_scores.items():
+					if gene == main_gene:
+						for tss_type, score in tss_type_dic.items():
+							final_results.extend([score])
 						break
-					for gene, tss_type_dic in percentile_dic.items():
-						if gene == main_gene:
-							for tss_type, percentile in tss_type_dic.items():
-								final_results.extend([percentile])
+				for gene, tss_type_dic in percentile_dic.items():
+					if gene == main_gene:
+						for tss_type, percentile in tss_type_dic.items():
+							final_results.extend([percentile])
 						break
-					for gene, tss_type_dic in canonical_hits_dic.items():
-						if gene == main_gene:
-							for tss_type, canonical_hits in tss_type_dic.items():
-								final_results.extend([canonical_hits])
+				for gene, tss_type_dic in canonical_hits_dic.items():
+					if gene == main_gene:
+						for tss_type, canonical_hits in tss_type_dic.items():
+							final_results.extend([canonical_hits])
 						break
-				out.write("\t".join(final_results) + "\n")
+				out.write("\t".join(str(x) for x in final_results) + "\n")
 
 if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
 	main( sys.argv )
