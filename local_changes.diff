@@ -1,0 +1,235 @@
+﻿diff --git a/TSS_finder.py b/TSS_finder.py
+index 910df80..e8e4c37 100644
+--- a/TSS_finder.py
++++ b/TSS_finder.py
+@@ -31,6 +31,7 @@ __usage__ = """
+ 
+ import re, os, sys, subprocess, gzip
+ import numpy as np
++from decimal import Decimal, ROUND_HALF_DOWN
+ from collections import defaultdict
+ try:
+ 	import matplotlib.pyplot as plt
+@@ -396,6 +397,26 @@ def main( arguments ):
+ 		output_folder += "/"
+ 	if not os.path.exists( output_folder ):
+ 		os.makedirs( output_folder )
++
++	if '--samtools' in arguments:
++		samtools = arguments[arguments.index('--samtools') + 1]
++	else:
++		samtools = "samtools"
++
++	if '--bedtools' in arguments:
++		bedtools = arguments[arguments.index('--bedtools') + 1]
++	else:
++		bedtools = "genomeCoverageBed"
++
++	if '--m' in arguments:
++		m = arguments[arguments.index('--m') + 1]
++	else:
++		m = "5000000"
++
++	if '--threads' in arguments:
++		t = arguments[arguments.index('--threads') + 1]
++	else:
++		t = "4"
+ 	
+ 	if '--bam' in arguments:
+ 		bam_file = arguments[ arguments.index('--bam')+1 ]
+@@ -405,30 +426,10 @@ def main( arguments ):
+ 		else:
+ 			bam_sorted_status = False
+ 		
+-		if '--samtools' in arguments:
+-			samtools = arguments[ arguments.index( '--samtools' )+1 ]
+-		else:
+-			samtools = "samtools"
+-	
+-		if '--bedtools' in arguments:
+-			bedtools = arguments[ arguments.index( '--bedtools' )+1 ]
+-		else:
+-			bedtools = "genomeCoverageBed"
+-	
+-		if '--m' in arguments:
+-			m = arguments[ arguments.index( '--m' )+1 ]
+-		else:
+-			m = "5000000000"
+-		
+-		if '--threads' in arguments:
+-			t = arguments[ arguments.index( '--threads' )+1 ]
+-		else:
+-			t = "4"
+-		
+ 		if not bam_sorted_status:	#sorting the BAM file if it was not sorted already
+ 			print ("sorting BAM file ...")
+ 			sorted_bam_file = output_folder + "sorted.bam"
+-			cmd = samtools + " sort -m " + m + " --threads " + t + " " + bam_file + " > " + sorted_bam_file
++			cmd = samtools + " sort -m " + str(m) + " --threads " + t + " " + bam_file + " > " + sorted_bam_file
+ 			p = subprocess.Popen( args= cmd, shell=True )
+ 			p.communicate()
+ 		
+@@ -447,7 +448,7 @@ def main( arguments ):
+ 				construct_scov_file( sorted_bam_file, scov_file, bedtools )
+ 		input_mode = "cov"
+ 		
+-	else:
++	elif '--sra_folder' not in arguments:
+ 		cov_file = arguments[ arguments.index('--cov')+1 ]
+ 		scov_file = arguments[ arguments.index('--scov')+1 ]
+ 		if cov_file.split('.')[-1].lower() == "gz":
+@@ -566,12 +567,13 @@ def main( arguments ):
+ 		median_size = np.median(intron_sizes)
+ 		mean_size = np.mean(intron_sizes)
+ 		intron_cutoff = np.percentile(intron_sizes, 99)
++		intron_cutoff = int(Decimal(str(intron_cutoff)).quantize(0, rounding=ROUND_HALF_DOWN))
+ 		intron_min = np.min(intron_sizes)
+ 		intron_max = np.max(intron_sizes)
+ 		print(f"Total number of introns: {len(intron_sizes)}")
+ 		print(f"Minimum intron size is {intron_min} and maximum intron size is {intron_max}")
+ 		print(f"Median intron size is {median_size} and mean intron size is {mean_size}")
+-		print(f"Intron size for the --alignIntronMax flag is {intron_cutoff}")
++		print(f"Intron size for the --alignIntronMax flag after rounding is {intron_cutoff}")
+ 		# plotting the intron size distribution
+ 		intron_plot=os.path.join(output_folder,'Intron_size_distribution.png')
+ 		plt.figure(figsize=(8, 5))
+@@ -585,55 +587,95 @@ def main( arguments ):
+ 		star_indexing_folder=os.path.join(output_folder,'STAR_index')
+ 		os.mkdir(star_indexing_folder)
+ 		# Indexing with STAR
+-		cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+index_bases
++		cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+str(t)+' --genomeSAindexNbases '+str(index_bases)
+ 		p = subprocess.Popen(args=cmd, shell=True)
+ 		p.communicate()
+ 		star_mapping_folder = os.path.join(output_folder,'STAR_map')
+ 		os.mkdir(star_mapping_folder)
+ 		if sra_folder:
+-			pairs=defaultdict(dict)#create a default dictionary for holding the paired end files
+-			for f in os.listdir(sra_folder):
+-				# Only consider FASTQ files
+-				if not f.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
+-					continue
+-				if "_pass_1_" in f:
+-					sample = f.split("_pass_1_")[0]
+-					pairs[sample]["R1"] = f
+-
+-				elif "_pass_2_" in f:
+-					sample = f.split("_pass_2_")[0]
+-					pairs[sample]["R2"] = f
++			pairs = defaultdict(dict)  # create a default dictionary for holding the paired end files
++
++			# Recursively walk through all subdirectories
++			for root, dirs, files in os.walk(sra_folder):
++				for f in files:
++					# Only consider FASTQ files
++					if not f.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
++						continue
++
++					# Store the full path instead of just filename
++					full_path = os.path.join(root, f)
++
++					if "_pass_1" in f:
++						sample = f.split("_pass_1.")[0]
++						pairs[sample]["R1"] = full_path
++
++					elif "_pass_2" in f:
++						sample = f.split("_pass_2.")[0]
++						pairs[sample]["R2"] = full_path
++			# Add check to ensure pairs were found
++			if not pairs:
++				raise ValueError(f"No paired-end files found in {sra_folder}. Check file naming pattern.")
++
++			print(f"Found {len(pairs)} sample(s) to process:")
++			for sample in pairs.keys():
++				print(f"  - {sample}")
++
+ 			for sample, reads in pairs.items():
+ 				if "R1" in reads and "R2" in reads:
+-					r1 = os.path.join(sra_folder, reads["R1"])
+-					r2 = os.path.join(sra_folder, reads["R2"])
+-					#RNAseq mapping with STAR
+-					prefix=os.path.join(star_mapping_folder,sample+'_')
+-					cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+intron_cutoff
++					r1 = reads["R1"]  # Already full path
++					r2 = reads["R2"]  # Already full path
++
++					# RNAseq mapping with STAR
++					prefix = os.path.join(star_mapping_folder, sample + '_')
++					cmd = 'ulimit -n 4096 && ' + star + ' --runMode alignReads --genomeDir ' + star_indexing_folder + ' --outSAMtype BAM SortedByCoordinate --readFilesIn ' + r1 + ' ' + r2 + ' --runThreadN ' + str(t) + ' --outFileNamePrefix ' + prefix + ' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax ' + str(intron_cutoff)
+ 					p = subprocess.Popen(args=cmd, shell=True)
+ 					p.communicate()
+-			#merging all the sorted BAM files obtained from STARlong mapping
+-			bam_files=os.path.join(output_folder,'bam_files.txt')
+-			if len(os.listdir(star_mapping_folder)) > 1:
+-				with open(bam_files,'w')as out:
+-					for f in os.listdir(star_mapping_folder):
+-						if f.endswith('bam'):
+-							out.write(f+'\n')
+-				merged_bam=os.path.join(output_folder,sample+'_merged.bam')
+-				cmd = samtools+' merge -o '+merged_bam+' -b '+bam_files
++			# merging all the sorted BAM files obtained from STAR mapping
++			star_map_contents = os.listdir(star_mapping_folder)
++			bam_files_list = [f for f in star_map_contents if f.endswith('.bam')]
++
++			if not bam_files_list:
++				raise FileNotFoundError(f"No BAM files found in {star_mapping_folder}. STAR mapping may have failed.")
++
++			print(f"Found {len(bam_files_list)} BAM file(s) to merge")
++			if len(bam_files_list) > 1:
++				# Multiple BAM files - need to merge
++				bam_files = os.path.join(output_folder, 'bam_files.txt')
++				with open(bam_files, 'w') as out:
++					for f in bam_files_list:
++						# Write full path
++						full_bam_path = os.path.join(star_mapping_folder, f)
++						out.write(full_bam_path + '\n')
++
++				merged_bam = os.path.join(output_folder, 'merged.bam')
++				cmd = samtools + ' merge -o ' + merged_bam + ' -b ' + bam_files
++				print(f"Merging {len(bam_files_list)} BAM files...")
+ 				p = subprocess.Popen(args=cmd, shell=True)
+ 				p.communicate()
+-				#sorting the merged bam file
+-				print("sorting merged BAM file ...")
+-				sorted_merged_bam_file = os.path.join(output_folder,sample+"_merged_sorted.bam")
+-				cmd = samtools + " sort -m " + m + " --threads " + t + " " + merged_bam + " > " + sorted_merged_bam_file
++				# Check if merge was successful
++				if not os.path.exists(merged_bam):
++					raise FileNotFoundError(f"Merge failed: {merged_bam} was not created")
++
++				# sorting the merged bam file
++				print("Sorting merged BAM file...")
++				sorted_merged_bam_file = os.path.join(output_folder, "merged_sorted.bam")
++				cmd = samtools + " sort -m " + str(m) + " --threads " + str(t) + " " + merged_bam + " > " + sorted_merged_bam_file
+ 				p = subprocess.Popen(args=cmd, shell=True)
+ 				p.communicate()
+-			elif len(os.listdir(star_mapping_folder)) == 1:
+-				for f in (os.listdir(star_mapping_folder)):
+-					sorted_merged_bam_file = f
+-			cov_file = output_folder + "reads_aligned.cov"
+-			scov_file = output_folder + "reads_spanning.cov"
++
++				# Check if sort was successful
++				if not os.path.exists(sorted_merged_bam_file):
++					raise FileNotFoundError(f"Sort failed: {sorted_merged_bam_file} was not created")
++
++			elif len(bam_files_list) == 1:
++				# Single BAM file - use it directly with full path
++				print("Only one BAM file found, using it directly")
++				sorted_merged_bam_file = os.path.join(star_mapping_folder, bam_files_list[0])
++
++			print(f"Final BAM file: {sorted_merged_bam_file}")
++
++			cov_file = os.path.join(output_folder, "reads_aligned.cov")
++			scov_file = os.path.join(output_folder, "reads_spanning.cov")
+ 
+ 			if not os.path.isfile(cov_file):
+ 				construct_cov_file(sorted_merged_bam_file, cov_file, bedtools)
+@@ -732,5 +774,7 @@ if '--bam' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gf
+ 	main( sys.argv )
+ elif '--cov' in sys.argv and '--scov' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
+ 	main( sys.argv )
++elif '--run_mode' in sys.argv and '--sra_folder' in sys.argv and '--out' in sys.argv and '--goi' in sys.argv and '--gff' in sys.argv and '--fasta' in sys.argv:
++	main(sys.argv)
+ else:
+ 	sys.exit( __usage__ )
