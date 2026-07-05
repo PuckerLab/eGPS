@@ -1,7 +1,7 @@
 ### Boas Pucker ###
 ### Shakunthala Natarajan ###
 ### pucker@uni-bonn.de ###
-__version__ = "v0.1"
+__version__ = "v0.1.0"
 
 __reference__ = "https://github.com/bpucker/eGPS"
 
@@ -60,7 +60,6 @@ from scipy import stats
 from scipy.stats import percentileofscore
 import seaborn as sns
 from decimal import Decimal, ROUND_HALF_DOWN
-from scipy.interpolate import interp1d
 from collections import defaultdict
 try:
 	import matplotlib.pyplot as plt
