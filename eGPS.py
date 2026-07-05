@@ -2286,10 +2286,9 @@ def main( arguments ):
 		with open (final_promoter_analysis_file, 'w') as out:
 			out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",
 									"Basal promoter motif score percentile", "Elevated promoter motif score percentile", "Accelerated promoter motif score percentile",
-									"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",]))
+									"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",])+ "\n")
 			for main_gene in list( results.keys() ):
 				final_results = []
-				print('entering main loop to write promoter analysis results')
 				for gene, tss_type_dic in motif_scores.items():
 					if gene == main_gene:
 						for tss_type, score in tss_type_dic.items():
