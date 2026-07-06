@@ -1830,7 +1830,7 @@ def main( arguments ):
 
 	#flag to determine the number of consecutive windows that must have mean cov values above the background
 	if '--signal_strength' in arguments:
-		strength = int(arguments[arguments.index('--strength')+1])
+		strength = int(arguments[arguments.index('--signal_strength')+1])
 	else:
 		strength = 3
 
