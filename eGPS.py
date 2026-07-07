@@ -1366,7 +1366,10 @@ def sort_key(row, orientation):
 		return(priority, position)
 
 def run_moods (sequence, pfm_folder, output_file, moods, pvalue):
-	cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + sequence + ' -p ' + str(pvalue) + ' -o ' + output_file
+	if moods == 'moods-dna.py':
+		cmd = moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + sequence + ' -p ' + str(pvalue) + ' -o ' + output_file
+	else:
+		cmd = 'python3 ' + moods + ' -m ' + pfm_folder + '/*.pfm ' + '-s ' + sequence + ' -p ' + str(pvalue) + ' -o ' + output_file
 	p = subprocess.Popen(args=cmd, shell=True)
 	p.communicate()
 	return output_file
