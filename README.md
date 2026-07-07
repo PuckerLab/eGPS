@@ -16,6 +16,14 @@ The rationale behind the multi-regime TSS analysis stems from the heterogeneity 
 
 An optional promoter analysis is facilitated by integrating MOODS, that helps determine motif hits in a given sequence, along with rich motif density plots. In case, motifs for certain transcription factor binding sites are already known to exist in the promoter sequences, this can very well be used as a secondary test to determine the most confident promoter sequence from the different TSS position associated promoter sequences, and thereby the relatively higher confidence TSS positions.
 
+## Workflow
+
+<img width="5748" height="5973" alt="tssfinder_workflow drawio" src="https://github.com/user-attachments/assets/41a09b2a-0756-44fb-b00c-5ef5803504f9" />
+
+## Installation
+
+
+
 ## Usage
 
 
@@ -119,6 +127,8 @@ Optional:
 
   --buffer                    INT       Number of bases to be ignored at the intergenic region ends [500]
 ```
+
+## More details
 
 `--cov` full path to the file containing the coverage based on aligned bases.
 
