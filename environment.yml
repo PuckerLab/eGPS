@@ -1,0 +1,21 @@
+name: egps
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # Core Python
+  - python=3.12.7
+  - pip
+  - pip:
+      - MOODS-python
+  
+  # Python libraries
+  - pandas
+  - matplotlib
+  
+  # External tools
+  - samtools
+  - bedtools
+  - star
+
