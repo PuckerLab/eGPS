@@ -231,13 +231,17 @@ Optional:
 `--buffer` is the number of bases to be skipped before and after the beginning and end of a gene to obtain a typical intergenic region free of read-through signal interruption from actual exonic regions.
 
   
+## Third party tool references
 
+-> Heng Li, Bob Handsaker, Alec Wysoker, Tim Fennell, Jue Ruan, Nils Homer, Gabor Marth, Goncalo Abecasis, Richard Durbin, 1000 Genome Project Data Processing Subgroup, The Sequence Alignment/Map format and SAMtools, Bioinformatics, Volume 25, Issue 16, August 2009, Pages 2078–2079, https://doi.org/10.1093/bioinformatics/btp352
 
+-> Aaron R. Quinlan, Ira M. Hall, BEDTools: a flexible suite of utilities for comparing genomic features, Bioinformatics, Volume 26, Issue 6, March 2010, Pages 841–842, https://doi.org/10.1093/bioinformatics/btq033
 
+-> Alexander Dobin, Carrie A. Davis, Felix Schlesinger, Jorg Drenkow, Chris Zaleski, Sonali Jha, Philippe Batut, Mark Chaisson, Thomas R. Gingeras, STAR: ultrafast universal RNA-seq aligner, Bioinformatics, Volume 29, Issue 1, January 2013, Pages 15–21, https://doi.org/10.1093/bioinformatics/bts635
 
+-> Kim, D., Paggi, J.M., Park, C. et al. Graph-based genome alignment and genotyping with HISAT2 and HISAT-genotype. Nat Biotechnol 37, 907–915 (2019). https://doi.org/10.1038/s41587-019-0201-4
 
-
-
+-> Janne Korhonen, Petri Martinmäki, Cinzia Pizzi, Pasi Rastas, Esko Ukkonen, MOODS: fast search for position weight matrix matches in DNA sequences, Bioinformatics, Volume 25, Issue 23, December 2009, Pages 3181–3182, https://doi.org/10.1093/bioinformatics/btp554
 
 ## References
 Cite this repository.
