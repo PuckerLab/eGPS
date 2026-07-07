@@ -1,14 +1,27 @@
 # eGPS: eukaryotic Gene Promoter Seeker
 
 ## Background
-This tool was developed to identify transcription start sites (TSS) in plants based on RNA-seq data coverage. The approach looks for the most 5' position upstream of a start codon (ATG) that is covered by RNA-seq reads. The coverage of aligned reads and the coverage of spanning reads are considered in this analysis. Input for the analysis is an RNA-seq read mapping (BAM file). The genome sequence and positions of genes are required for the TSS identification.
+
+This tool was developed to identify transcription start sites (TSS) in plants based on RNA-seq data coverage. The coverage of aligned reads and the coverage of spanning reads are considered in this analysis. The approach looks for the most 5' position upstream of a start codon (ATG) that is covered by RNA-seq reads. Input sample-specific background baseline coverage determination is achieved via a sliding-window approach . Input for the analysis is an RNA-seq read mapping (BAM file). The genome sequence and positions of genes are required for the TSS identification. 
+
+Depending on the background basal coverage baseline, three possible TSS positions can be reported per gene - basal, elevated and accelerated TSS. Accordingly, the respective promoters are extracted and reported. Coverage plots of the reported TSS regions are also provided as outputs, encompassing sub-plots of gene feature boundaries of mRNA, 5'UTR, CDS retrived from the user-provided GFF3 file.
+
+**Basal TSS position** - First position with coverage in the basal coverage region i.e. this region shows no significant elevation in coverage with respect to the intergenic region average coverage values that are used as a baseline
+
+**Elevated TSS position** - First position with coverage in the elevated coverage region i.e. this region shows significant elevation in coverage with respect to the intergenic region average coverage values that are used as a baseline
+
+**Accelerated TSS position** - In case an elevated TSS is detected, then the elevated TSS and coverage walk origin are taken as boundaries and this region is first investigated to see if the average coverage values per window in this region deviate from uniform distribution via a Kolmogorov-Smirnov distribution fit test (adopted from 1. Cass, A. A. & Xiao, X. mountainClimber Identifies Alternative Transcription Start and Polyadenylation Sites in RNA-Seq. Cell Systems 9, 393-400.e6 (2019).). In case, the KS-test p-value is statistically significant (ks_pval turns out less than the default threshold of 0.01), then this region is investigated to find the accelerated TSS, the minima point accompanying the steepest increase in coverage.
+
+The rationale behind the multi-regime TSS analysis stems from the heterogeneity in the nature and noise of the input RNA-seq samples and previous reports of multiple TSS sites for eukaryotic genes. Thus, the approach adopted by eGPS helps obtain putative TSS positions for a gene at different coverage levels.
+
+An optional promoter analysis is facilitated by integrating MOODS, that helps determine motif hits in a given sequence, along with rich motif density plots. In case, motifs for certain transcription factor binding sites are already known to exist in the promoter sequences, this can very well be used as a secondary test to determine the most confident promoter sequence from the different TSS position associated promoter sequences, and thereby the relatively higher confidence TSS values.
 
 ## Usage
 
 
 ```
 Usage:
-  python3 TSS_finder.py [--bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
+  python3 eGPS.py [--bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
 
 Mandatory:
   --cov              STR       Aligned bases coverage file (COV)
