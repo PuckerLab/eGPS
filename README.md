@@ -14,7 +14,7 @@ Depending on the background basal coverage baseline, three possible TSS position
 
 The rationale behind the multi-regime TSS analysis stems from the heterogeneity in the nature and noise of the input RNA-seq samples and previous reports of multiple TSS sites for eukaryotic genes. Thus, the approach adopted by eGPS helps obtain putative TSS positions for a gene at different coverage levels.
 
-An optional promoter analysis is facilitated by integrating MOODS, that helps determine motif hits in a given sequence, along with rich motif density plots. In case, motifs for certain transcription factor binding sites are already known to exist in the promoter sequences, this can very well be used as a secondary test to determine the most confident promoter sequence from the different TSS position associated promoter sequences, and thereby the relatively higher confidence TSS values.
+An optional promoter analysis is facilitated by integrating MOODS, that helps determine motif hits in a given sequence, along with rich motif density plots. In case, motifs for certain transcription factor binding sites are already known to exist in the promoter sequences, this can very well be used as a secondary test to determine the most confident promoter sequence from the different TSS position associated promoter sequences, and thereby the relatively higher confidence TSS positions.
 
 ## Usage
 
@@ -22,55 +22,101 @@ An optional promoter analysis is facilitated by integrating MOODS, that helps de
 ```
 Usage:
 
-  python3 eGPS.py [--sra_folder <READ_FILES> | --bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
+  python3 eGPS.py [--sra_folder <READ_FILES> | --bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] \
+                  --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
 
 Mandatory:
 
   --sra_folder                STR       Folder encompassing sub-folders of SRA files for RNA-seq mapping
+
   --cov                       STR       Aligned bases coverage file (COV)
+
   --scov                      STR       Spanning read coverage file (COV)
+
   --bam                       STR       BAM file to automatically create the coverage file
+
   --fasta                     STR       FASTA assembly file for read mapping
+
   --gff                       STR       GFF file with gene information
+
   --out                       STR       Output directory
 
 Optional:
 
   --run_mode                  STR       Mode option for running the script [find_tss]
+
   --mincov                    STR       Minimal coverage [1]
+
   --samtools                  STR       Full path to samtools (if not in your $PATH)
+
   --bedtools                  STR       Full path to bedtools (if not in your $PATH)
+
   --bam_is_sorted             STR       Do not sort BAM file
+
   --m                         INT       Memory for sorting via samtools [5000000000]
+
   --threads                   INT       Number of threads for samtools [4]
+
   --minexon                   INT       Minimal exon size [10]
+
   --flanksize                 INT       Flanking region size in plot [50]
+
   --gapsize                   INT       Coverage gap size [5]
+
   --splicesites               STR       Handling of splice sites[strict](strict|off)
+
   --intron_percentile_cutoff  STR       Intron size percentile cutoff for RNA-seq mapping
-  --neighbourhood             STR       Number of neighbourhood genes to be considered for overlapping gene check analysis
+
+  --neighbourhood             STR       Number of neighbourhood genes to be considered for
+                                        overlapping gene check analysis [5]
+
   --min_promoter_size         INT       Minimum length of promoter to be extracted [50]
+
   --max_promoter_size         INT       Maximum length of promoter to be extracted [1000]
-  --background                INT       Number of random background sequences to be considered for motif scoring in promoter analysis [1000]
+
+  --background                INT       Number of random background sequences to be considered for
+                                        motif scoring in promoter analysis [1000]
+
   --upstream_slice            INT       Length of promoter region to be considered for motif analysis [200]
-  --downstream_slice          INT       Length of region downstream to the identified promoter to be considered for motif analysis [50]
+
+  --downstream_slice          INT       Length of region downstream to the identified promoter to be
+                                        considered for motif analysis [50]
+
   --aligner                   STR       Option to choose between aligners HISAT2 and STAR [STAR]
+
   --STAR                      STR       Full path to STAR
+
   --index_bases               STR       Parameter for genome index generation for RNA-seq mapping [12]
+
   --fastq_pattern             STR       SRA FASTQ file's naming pattern [_pass_1, _pass_2]
+
   --analyse_promoter          STR       Option to activate promoter analysis [no]
+
   --moods                     STR       Full path to the MOODS script
+
   --PFM                       STR       Full path to config file for promoter motif analysis
+
   --moods_pval                FLOAT     Moods threshold for discovering motif hits [0.01]
-  --background_percentage     FLOAT     Maximum fraction of intergenic background fragments that have average coverage values that meet or
-                                        exceed the candidate window's average coverage [0.05]
+
+  --background_percentage     FLOAT     Maximum fraction of intergenic background fragments that have
+                                        average coverage values that meet or exceed the candidate
+                                        window's average coverage [0.05]
+
   --ks_pval                   FLOAT     p-value cut-off for the Kolmogorov Smirnov test [0.01]
-  --background_unit           INT       Length of windows to be considered for sliding window approach used to infer gene expression levels
-                                        and distinguish the coverage region into basal, elevated and accelerated regions [10]
-  --intron_trim               INT        Number of bases to trim from intron ends [5]
+
+  --background_unit           INT       Length of windows to be considered for sliding window approach
+                                        used to infer gene expression levels and distinguish the coverage
+                                        region into basal, elevated and accelerated regions [10]
+
+  --intron_trim               INT       Number of bases to trim from intron ends [5]
+
   --slide                     INT       Progression interval of a sliding window [1]
-  --signal_strength           INT       Number of consecutive windows needed to cross the baseline for marking the elevated TSS position [3]
+
+  --signal_strength           INT       Number of consecutive windows needed to cross the baseline
+                                        for marking the elevated TSS position [3]
+
   --lookahead                 INT       Number of positions to be looked ahead for determining the accelerated TSS [20]
+
   --buffer                    INT       Number of bases to be ignored at the intergenic region ends [500]
 ```
 
