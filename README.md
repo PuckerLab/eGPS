@@ -22,7 +22,32 @@ An optional promoter analysis is facilitated by integrating MOODS, that helps de
 
 ## Installation
 
+**(1) Manual installation**
 
+```
+git clone https://github.com/bpucker/eGPS
+```
+**Mandatory dependencies**
+-> Tools - samtools, bedtools
+-> Python libraries - pandas (v2.3.1 or greater), matplotlib (v3.10.5 or greater)
+
+**Optional dependencies**
+-> Tools - STAR/ HISAT2, MOODS
+
+**(2) Installation in a conda environment**
+
+This method of installation installs all the dependencies in a conda environment using the environment.yml file in this repository
+
+```
+git clone https://github.com/bpucker/eGPS
+
+cd eGPS
+
+conda env create -f environment.yml
+
+conda activate egps
+
+```
 
 ## Usage
 
