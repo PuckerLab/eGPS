@@ -21,12 +21,13 @@ An optional promoter analysis is facilitated by integrating MOODS, that helps de
 
 ```
 Usage:
-  python3 eGPS.py [--bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
+  python3 eGPS.py [--sra_folder <READ_FILES> | --bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
 
 Mandatory:
+  --sra_folder       STR       Folder encompassing sub-folders of SRA files for RNA-seq mapping
   --cov              STR       Aligned bases coverage file (COV)
   --scov             STR       Spanning read coverage file (COV)
-  --bam              STR       BAM file to automatically create the coverage file]
+  --bam              STR       BAM file to automatically create the coverage file
   --fasta            STR       FASTA assembly file for read mapping
   --gff              STR       GFF file with gene information
   --out              STR       Output directory
@@ -42,6 +43,16 @@ Optional:
   --flanksize        INT       Flanking region size in plot [50]
   --gapsize          INT       Coverage gap size [5]
   --splicesites      STR       Handling of splice sites[strict](strict|off)
+  --intron_percentile_cutoff  STR  Intron size percentile cutoff for RNA-seq mapping
+  --neighbourhood    STR      Number of neighbourhood genes to be considered for overlapping gene check analysis
+  --min_promoter_size  INT    Minimum length of promoter to be extracted [50]
+  --max_promoter_size  INT    Maximum length of promoter to be extracted [1000]
+  --background    INT    Number of random background sequences to be considered for motif scoring in promoter analysis [1000]
+  --upstream_slice  INT  Length of promoter region to be considered for motif analysis [200]
+  --downstream_slice  INT  Length of region downstream to the identified promoter to be considered for motif analysis [50]
+  --aligner    STR    Option to choose between aligners HISAT2 and STAR [STAR]
+  --STAR    STR    Full path to STAR
+  --index_bases  
 ```
 
 `--cov` full path to the file containing the coverage based on aligned bases.
