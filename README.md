@@ -86,6 +86,8 @@ Optional:
 
   --STAR                      STR       Full path to STAR
 
+  --HISAT2                    STR       Full path to HISAT2
+
   --index_bases               STR       Parameter for genome index generation for RNA-seq mapping [12]
 
   --fastq_pattern             STR       SRA FASTQ file's naming pattern [_pass_1, _pass_2]
@@ -107,8 +109,6 @@ Optional:
   --background_unit           INT       Length of windows to be considered for sliding window approach
                                         used to infer gene expression levels and distinguish the coverage
                                         region into basal, elevated and accelerated regions [10]
-
-  --intron_trim               INT       Number of bases to trim from intron ends [5]
 
   --slide                     INT       Progression interval of a sliding window [1]
 
@@ -132,6 +132,9 @@ Optional:
 
 `--out` full path to output folder. This folder will be created if it does not exist already.
 
+`--run_mode` Two modes are available -> find_tss | make_bam 
+             find_tss is the default; make_bam can be activated if you want to perform the RNA-seq mapping and then proceed to TSS analysis
+
 `--mincov` minimal coverage for 5'-UTR identification. Default: 1.
 
 `--samtools` full path to samtools. Default: samtools.
@@ -149,6 +152,56 @@ Optional:
 `--gapsize` specifies the gap size in coverage due to sequence variants between RNA-seq reads and reference. Default: 5.
 
 `--splicesites` specifies the handling of putative introns. Modes: strict, off. strict enforces a check for canonical splice sites at the ends of a putative intron. off enables the consideration of introns without canonical splice sites. Default: strict.
+
+`--intron_percentile_cutoff' specifies the percentile cutoff to be used for determining the maximum intron size for RNA-seq mapping. By default 99th percentile of intron sizes is used.
+
+`--neighbourhood` is the number of genes to be considered as neighbours for the gene of interest (GOI) both up and downstream. This facilitates overlap checking analysis in the specified neighbourhood window. By default overlap analysis is done across 5 genes up and downstream, and if one of the following overlap types is found, the TSS analysis is skipped - 
+
+  -> head-head overlap: There is an overlap between the GOI's start and one of the neighbour's start
+
+  -> head into neighbour: The gene start is within the bounds of one of its neighbours
+
+  -> same strand: Overlap between the start and end of two genes in the neighbourhood with one being the GOI and both the genes belonging to the same strand
+
+  -> nested: One of the two genes in a neighbourhood window are nested within the other gene with either of them being the GOI 
+
+`--background`: MOODS provides a score for every motif it finds in the given DNA sequence based on the position frequency matrix (PFM) supplied. But this motif can also be found randomly in any other random DNA sequence and not necessarily in the promoter sequence alone. Hence for every cumulative motif scores computed for a fixed length of bases in and downstream of a promoter sequence, the MOODS analysis is also repeated for n random fragments of the same size from across the genome to compute the percentile of the promoter's reported cumulative motif score against a set of random bacgkround scores. n is 1000 by default.
+
+`--upstream_slice` and `--downstream_slice` are the number of bases to be sliced upstream of the TSS and downstream of it, for MOODS analysis. The cumulative sum of these two values will be used as the length of the random sequence fragments that will be retrieved from across the genome for teh background MOODS analysis. These flags' default values are 200 bp and 50 bp by default.
+
+`--PFM` is the full path to a config TXT file for promoter motif analysis. The structure of this config file is as follows - It is a TAB separated TXT file with the following columns:
+
+   -> **Motif_name  Path_to_PFM_file	Upstream_boundary	Downstream_boundary  Direction_sensitivity**
+   
+   -> Motif_name is the name of your motif of interest like TATA
+   
+   -> MOODS accepts PFM files in the JASPAR raw .pfm file format
+   
+   -> Upstream and downstream boundaries are respectively the canonical or previously reported position boundaries for occurrence of the motif of your interest upstream of and downstream to the determined TSS of the extracted promoter at hand. Both these columns should have integer values. If you want a motif element to be analysed only in the upstream end then put in 0 in the downstream boundary column and vice versa if you want only downstream analysis.
+
+   -> Direction sensitivity means that some motif's are meaningful only if they are discovered in the same strand as the GOI. Specify yes if the motif is direction sensitive and no if it is not.
+
+`--moods_pval` is the p-value cut-off for MOODS to report significant motif hits. The lower this value, stricter is the motif hit analysis. MOODS has a default of 0.001 of this p-value. But in some experimentally verified plant promoter sequences known to have TATA box motifs, this p-value could not retrieve the hits. Hence the p-value threshold for the MOODS analysis within eGPS has been increased.
+
+`--background_percentage` is the maximum fraction of fixed size fragements in the intergenic region that can have the same or greater average coverage value as the candidate window from a gene of interest being analysed for TSS detection. 
+
+`--signal_strength` is the number of consecutive windows that must show an elevated coverage value against the intergenic baseline for a position to be deemed as the start of the elevated coverage region or the elevated TSS
+
+`--background_unit` is the length of a window for the sliding window analysis. Since coverage values are being dealt with in eGPS, taking the coverage of a single position or the average coverage of a large number of positions will be extremely prone to outliers in the highly random coverage value dataset. Hence to leverage the power of average and to also counter against the randomness associated at single position resolution, a window of size 10 bp is chosen as a default while also keeping the computational time in perspective. 
+
+`--slide` determines the number of bases a sliding window progresses across a region. It is set to 1 by default so that the TSS reporting can happen at a single base resolution.
+
+`--lookahead` is the number of bases to be looked ahead to adopt a cumulative coverage sum analysis to determine the minima point accompanying the steepest jump in coverage as the accelerated TSS position.
+
+`--buffer` is the number of bases to be skipped before and after the beginning and end of a gene to obtain a typical intergenic region free of read-through signal interruption from actual exonic regions.
+
+  
+
+
+
+
+
+
 
 
 ## References
