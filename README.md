@@ -148,9 +148,11 @@ Optional:
   --signal_strength           INT       Number of consecutive windows needed to cross the baseline
                                         for marking the elevated TSS position [3]
 
-  --lookahead                 INT       Number of positions to be looked ahead for determining the accelerated TSS [20]
+  --lookahead                 INT       Number of positions to be looked ahead for determining
+                                        the accelerated TSS [20]
 
-  --buffer                    INT       Number of bases to be ignored at the intergenic region ends [500]
+  --buffer                    INT       Number of bases to be ignored at the intergenic
+                                        region ends [500]
 ```
 
 ## More details
