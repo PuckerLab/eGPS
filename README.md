@@ -60,13 +60,15 @@ Usage:
 
 Mandatory:
 
-  --sra_folder                STR       Folder encompassing sub-folders of SRA files for RNA-seq mapping
+  --sra_folder                STR       Folder encompassing sub-folders of SRA files
+                                        for RNA-seq mapping
 
   --cov                       STR       Aligned bases coverage file (COV)
 
   --scov                      STR       Spanning read coverage file (COV)
 
-  --bam                       STR       BAM file to automatically create the coverage file
+  --bam                       STR       BAM file to automatically create the
+                                        coverage file
 
   --fasta                     STR       FASTA assembly file for read mapping
 
@@ -107,38 +109,47 @@ Optional:
 
   --max_promoter_size         INT       Maximum length of promoter to be extracted [1000]
 
-  --background                INT       Number of random background sequences to be considered for
-                                        motif scoring in promoter analysis [1000]
+  --background                INT       Number of random background sequences to be
+                                        considered for motif scoring in
+                                        promoter analysis [1000]
 
   --upstream_slice            INT       Length of promoter region to be considered for
                                         motif analysis [200]
 
-  --downstream_slice          INT       Length of region downstream to the identified promoter
-                                        to be considered for motif analysis [50]
+  --downstream_slice          INT       Length of region downstream to the identified
+                                        promoter to be considered for
+                                        motif analysis [50]
 
-  --aligner                   STR       Option to choose between aligners HISAT2 and STAR [STAR]
+  --aligner                   STR       Option to choose between aligners -
+                                        STAR and HISAT2 [STAR]
 
   --STAR                      STR       Full path to STAR
 
   --HISAT2                    STR       Full path to HISAT2
 
-  --index_bases               STR       Parameter for genome index generation for RNA-seq mapping [12]
+  --index_bases               STR       Parameter for genome index generation for
+                                        RNA-seq mapping [12]
 
-  --fastq_pattern             STR       SRA FASTQ file's naming pattern [_pass_1, _pass_2]
+  --fastq_pattern             STR       SRA FASTQ file's naming pattern
+                                        [_pass_1, _pass_2]
 
   --analyse_promoter          STR       Option to activate promoter analysis [no]
 
   --moods                     STR       Full path to the MOODS script
 
-  --PFM                       STR       Full path to config file for promoter motif analysis
+  --PFM                       STR       Full path to config file for promoter
+                                        motif analysis
 
-  --moods_pval                FLOAT     Moods threshold for discovering motif hits [0.01]
+  --moods_pval                FLOAT     Moods threshold for discovering
+                                        motif hits [0.01]
 
-  --background_percentage     FLOAT     Maximum fraction of intergenic background fragments
-                                        that have average coverage values that meet or
-                                        exceed the candidate window's average coverage [0.05]
+  --background_percentage     FLOAT     Maximum fraction of intergenic background
+                                        fragments that have average coverage values
+                                        that meet or exceed the candidate window's
+                                        average coverage [0.05]
 
-  --ks_pval                   FLOAT     p-value cut-off for the Kolmogorov Smirnov test [0.01]
+  --ks_pval                   FLOAT     p-value cut-off for the Kolmogorov
+                                        Smirnov test [0.01]
 
   --background_unit           INT       Length of windows to be considered for sliding
                                         window approach used to infer gene expression
@@ -148,13 +159,14 @@ Optional:
   --slide                     INT       Progression interval of a sliding window [1]
 
   --signal_strength           INT       Number of consecutive windows needed to cross
-                                        the baseline for marking the elevated TSS position [3]
+                                        the baseline for marking the
+                                        elevated TSS position [3]
 
-  --lookahead                 INT       Number of positions to be looked ahead for determining
-                                        the accelerated TSS [20]
+  --lookahead                 INT       Number of positions to be looked ahead
+                                        for determining the accelerated TSS [20]
 
-  --buffer                    INT       Number of bases to be ignored at the intergenic
-                                        region ends [500]
+  --buffer                    INT       Number of bases to be ignored at the
+                                        intergenic region ends [500]
 ```
 
 ## More details
