@@ -102,8 +102,8 @@ Optional:
 
   --intron_percentile_cutoff  STR       Intron size percentile cutoff for RNA-seq mapping
 
-  --neighbourhood             STR       Number of neighbourhood genes to be considered for
-                                        overlapping gene check analysis [5]
+  --neighbourhood             STR       Number of neighbourhood genes to be considered
+                                        for overlapping gene check analysis [5]
 
   --min_promoter_size         INT       Minimum length of promoter to be extracted [50]
 
