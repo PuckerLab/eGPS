@@ -62,6 +62,7 @@ import re, os, sys, subprocess, gzip
 import random
 import math
 import tempfile
+import time
 import traceback
 import numpy as np
 from scipy import stats
@@ -471,9 +472,9 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 	z_ig = percent_zero / 100  # fraction of zero cov positions in the intergenic region
 	return intergenic_window_coverages_wo_outliers, z_ig, percent_zero, percent_nonzero
 
-def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot ):
+def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene, orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot, introns_to_plot ):
 	"""! @brief generate a coverage plot """
-	fig, (ax1, ax_features) = plt.subplots(2, 1, figsize=(10, 6), gridspec_kw={'height_ratios':[4,1]}, sharex=True)
+	fig, (ax1, ax_features) = plt.subplots(2, 1, figsize=(10, 6), gridspec_kw={'height_ratios':[4,1.5]}, sharex=True)
 	ax1.plot(values, color="black", linestyle="solid")  # coverage of aligned bases
 	ax2 = ax1.twinx()
 	ax2.plot(svalues, color="red", linestyle="dotted")  # coverage of spanning reads
@@ -533,6 +534,12 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_
 		ax_features.add_patch(arrow)
 		dotted_arrow = FancyArrow(x=xdot_origin, y=0.8, dx=predicted_tss_five_utr_feature, dy=0, width=0.2, head_width=0.3,head_length=20, length_includes_head=True, facecolor='none', alpha=0.5,edgecolor='salmon', linewidth=0.5, linestyle='dotted')
 		ax_features.add_patch(dotted_arrow)
+	if introns_to_plot:
+		for intron_start, intron_end in introns_to_plot:
+			ax_features.plot(
+				[intron_start, intron_end], [1.1, 1.1],
+				color='darkorange', linewidth=2, solid_capstyle='butt', alpha=0.7, zorder=1
+			)
 
 	# extend vertical lines into feature axis
 	ax_features.axvline(atg_pos, color="green", linestyle="dotted")
@@ -547,8 +554,12 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_
 	ax_features.axvline(boundary_tss_for_plot, color=colour, linestyle="dotted")
 
 	ax1.set_title(gene + "   (" + orientation + ")")
-	ax_features.set_yticks([0.2, 0.5, 0.8])
-	ax_features.set_yticklabels(['mRNA', 'CDS', "5'UTR"], fontsize=8)
+	if introns_to_plot:
+		ax_features.set_yticks([0.2, 0.5, 0.8, 1.1])
+		ax_features.set_yticklabels(['mRNA', 'CDS', "5'UTR", "Intron"], fontsize=8)
+	else:
+		ax_features.set_yticks([0.2, 0.5, 0.8])
+		ax_features.set_yticklabels(['mRNA', 'CDS', "5'UTR"], fontsize=8)
 	ax1.set_xlabel("Position in genomic region from " + str(genomic_start) + " to " + str(genomic_end))
 	ax1.set_ylabel("Aligned RNA-seq coverage")
 	ax1.yaxis.label.set_color('black')
@@ -935,6 +946,18 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
 			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	introns_to_plot = []
+	for intron_start_key, intron_end_val in intron_boundary_marker.items():
+		if intron_end_val >= plot_start_region and intron_start_key <= plot_end_region:  # primary bounds check
+			if intron_start_key >= plot_start_region and intron_end_val <= plot_end_region:  # case1: fully inside
+				introns_to_plot.append(((intron_start_key - plot_start_region), (intron_end_val - plot_start_region)))
+			elif intron_start_key <= plot_start_region and intron_end_val <= plot_end_region:  # case2: start out of bounds
+				introns_to_plot.append((0, (intron_end_val - plot_start_region)))
+			elif intron_start_key >= plot_start_region and intron_end_val >= plot_end_region:  # case3: end out of bounds
+				introns_to_plot.append(((intron_start_key - plot_start_region), (plot_end_region - plot_start_region)))
+			elif intron_start_key <= plot_start_region and intron_end_val >= plot_end_region:  # case4: spans whole plot
+				introns_to_plot.append((0, (plot_end_region - plot_start_region)))
 	boundary_tss_for_plot = starting_tss_for_plot - plot_start_region
 	basal_tss_pos=None
 	elevated_tss_pos=None
@@ -953,7 +976,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	orientation = "+"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot, introns_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
 
@@ -1226,6 +1249,18 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
 			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+
+	introns_to_plot = []
+	for intron_start_key, intron_end_val in intron_boundary_marker.items():
+		if intron_end_val >= plot_start_region and intron_start_key <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+			if intron_start_key >= plot_start_region and intron_end_val <= plot_end_region:  # case1 where feature is entirely within the plot bounds
+				introns_to_plot.append(((intron_start_key - plot_start_region), (intron_end_val - plot_start_region)))
+			elif intron_start_key <= plot_start_region and intron_end_val <= plot_end_region:  # case2 where feature start is out of the plot bounds
+				introns_to_plot.append((0, (intron_end_val - plot_start_region)))
+			elif intron_start_key >= plot_start_region and intron_end_val >= plot_end_region:  # case3 where feature end is out of the plot bounds
+				introns_to_plot.append(((intron_start_key - plot_start_region), (plot_end_region - plot_start_region)))
+			elif intron_start_key <= plot_start_region and intron_end_val >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+				introns_to_plot.append((0, (plot_end_region - plot_start_region)))
 	boundary_tss_for_plot = end_tss_for_plot - plot_start_region
 	basal_tss_pos=None
 	elevated_tss_pos=None
@@ -1244,7 +1279,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	orientation = "-"
 	dna_sequence_for_plot = genome_seq[contig][genomic_start:genomic_end + 1]
 	try:
-		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot)
+		generate_plot(values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot, introns_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
 
@@ -1648,7 +1683,7 @@ def main( arguments ):
 		
 		cov_file = output_folder + "reads_aligned.cov"
 		scov_file = output_folder + "reads_spanning.cov"
-		
+		t_cov_start = time.perf_counter()
 		if bam_sorted_status:
 			if not os.path.isfile( cov_file ):
 				construct_cov_file( bam_file, cov_file, bedtools )
@@ -1660,7 +1695,9 @@ def main( arguments ):
 			if not os.path.isfile( scov_file ):
 				construct_scov_file( sorted_bam_file, scov_file, bedtools )
 		input_mode = "cov"
-		
+		t_cov_end = time.perf_counter()
+		time_cov_file_creation = t_cov_end - t_cov_start
+		print(f'time taken for cov and scov file generation is {time_cov_file_creation} seconds')
 	elif '--sra_folder' not in arguments:
 		cov_file = arguments[ arguments.index('--cov')+1 ]
 		scov_file = arguments[ arguments.index('--scov')+1 ]
@@ -2028,9 +2065,13 @@ def main( arguments ):
 
 	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
 	genome_seq, seq_counter = load_sequences( fasta_file )
+	t_intergenic_start = time.perf_counter()
 	print(f'Retrieving intergenic background seqs')
 	intergenic_window_coverages, z_ig, ig_percent_zero, ig_percent_nonzero = get_intergenic_background_seqs(output_folder, coverage_dic, intergenic_buffer, intergenic_region_size,genes_per_chromosome, gene_infos)
-	print(f'Completed retrieving intergenic noise seqs')
+	print(f'Completed retrieving intergenic background seqs')
+	t_intergenic_end = time.perf_counter()
+	t_intergenic_time = t_intergenic_end - t_intergenic_start
+	print(f'time taken to complete intergenic background seqs: {t_intergenic_time}')
 	if promoter_analysis == 'yes':
 		print("Retrieving background seqs.")
 		background_seq_len = upstream_slice + downstream_slice
@@ -2061,6 +2102,12 @@ def main( arguments ):
 	five_utr_dic = {}
 	percentile_dic = {}
 	canonical_hits_dic = {}
+	tflank = 0
+	texp = 0
+	toverlap = 0
+	tanalysis = 0
+	textract = 0
+	t_tss_start_analysis = time.perf_counter()
 	for gene in goi:
 		try:
 			cov_per_contig = coverage[gene_infos[gene]['chromosome']]  # get coverage of the sequence that harbours the gene of interest
@@ -2111,15 +2158,22 @@ def main( arguments ):
 					five_utr_dic[gene] = f"No CDS annotated. {gene} start used for TSS prediction."
 				if gene not in five_utr_dic and orientation == '-':
 					five_utr_dic[gene] = f"No CDS annotated. {gene} end used for TSS prediction."
+			tflank_start = time.perf_counter()
 			upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
+			tflank_end = time.perf_counter()
+			tflank += (tflank_end - tflank_start)
 			avg_cov_gene = sum(cov_per_contig[start - 1:end]) / (end - (start - 1))  # get average coverage of the gene of interest for confidence thresholding
+			texp_start = time.perf_counter()
 			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene, intergenic_region_size, background_percentage)
+			texp_end = time.perf_counter()
+			texp += (texp_end - texp_start)
 			gene_exp_status_dic[gene] = gene_exp_status
 			#check if goi is an overlapping gene
 			#TSS-blocking overlap types
 			SKIP_TSS_TYPES = {'head_head', 'head_into_neighbor', 'same_strand', 'nested'}#'tail_tail' and 'tail_into_neighbor' overlap types are safe for TSS analysis
 			goi_strand = gene_infos[gene]['orientation']
 			blocking_overlaps = 0
+			toverlap_start = time.perf_counter()
 			for ugene in upstream_gene_list:
 				nbr = gene_infos[ugene]
 
@@ -2138,6 +2192,8 @@ def main( arguments ):
 					print(f"  {gene} - {dgene}: {ov_type} overlap")
 					if ov_type in SKIP_TSS_TYPES:
 						blocking_overlaps += 1
+			toverlap_end = time.perf_counter()
+			toverlap += (toverlap_end - toverlap_start)
 			if blocking_overlaps > 0:
 				print(f"{gene} has {blocking_overlaps} overlap(s). TSS analysis skipped.")
 				continue
@@ -2151,7 +2207,10 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
+				tanalysis_start = time.perf_counter()
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				tanalysis_end = time.perf_counter()
+				tanalysis += (tanalysis_end - tanalysis_start)
 				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
 				tss_list = {}
 				if basal_tss:
@@ -2172,6 +2231,7 @@ def main( arguments ):
 				motif_scores[gene] = {}
 				percentile_dic[gene] = {}
 				canonical_hits_dic[gene] = {}
+				textract_start = time.perf_counter()
 				for tss_type in tss_list:
 					if tss_list[tss_type]:
 						promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
@@ -2195,13 +2255,18 @@ def main( arguments ):
 							percentile_dic[gene][tss_type] = None
 							canonical_hits_dic[gene][tss_type] = None
 				results.update( { gene: result } )
+				textract_end = time.perf_counter()
+				textract += (textract_end - textract_start)
 			else:	#solution for reverse strand genes
 				fig_file = output_folder + gene + ".png"
 				if downstream_gene:
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
+				tanalysis_start = time.perf_counter()
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				tanalysis_end = time.perf_counter()
+				tanalysis += (tanalysis_end - tanalysis_start)
 				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
 				tss_list = {}
 				if basal_tss:
@@ -2222,6 +2287,7 @@ def main( arguments ):
 				motif_scores[gene] = {}
 				percentile_dic[gene] = {}
 				canonical_hits_dic[gene] = {}
+				textract_start = time.perf_counter()
 				for tss_type in tss_list:
 					if tss_list[tss_type]:
 						promoter_status, promoter, downstream_to_tss, full_seq = extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss_list[tss_type], orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size )
@@ -2245,6 +2311,8 @@ def main( arguments ):
 							percentile_dic[gene][tss_type] = None
 							canonical_hits_dic[gene][tss_type] = None
 				results.update( { gene: result } )
+				textract_end = time.perf_counter()
+				textract += (textract_end - textract_start)
 			# calculating confidence score
 			isoforms = len(transcripts_per_gene[gene])  # no. of isoforms per gene
 
@@ -2253,6 +2321,14 @@ def main( arguments ):
 		except KeyError as e:
 			print(f"Missing gene error: {gene}, missing key: {e}")
 			traceback.print_exc()
+	t_tss_end_analysis = time.perf_counter()
+	time_tss_analysis = t_tss_end_analysis - t_tss_start_analysis
+	print(f'time taken for tss analysis of all gois: {time_tss_analysis} seconds')
+	print(f'time taken for flanking gene analysis of all gois: {tflank} seconds')
+	print(f'time taken for expression level analysis of all gois: {texp} seconds')
+	print(f'time taken for overlap type assessment of all gois: {toverlap} seconds')
+	print(f'time taken for tss analysis of all gois: {tanalysis} seconds')
+	print(f'time taken for promoter extraction of all gois: {textract} seconds')
 
 	# --- report TSS in output file --- #
 	final_output_file = os.path.join(output_folder, "Results.tsv")
