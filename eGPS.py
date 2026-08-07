@@ -59,6 +59,7 @@ __usage__ = """
 
 
 import re, os, sys, subprocess, gzip
+import bisect
 import random
 import math
 import tempfile
@@ -608,31 +609,22 @@ def get_overlap_type(goi_strand, goi_start, goi_end, nbr_strand, nbr_start, nbr_
 	return 'nested'
 
 #function to find the gene expression level of a gene of interest with respect to the background
-def find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene,intergenic_region_size,pvalue):
-	for contig in genes_per_chromosome:
-		if gene in genes_per_chromosome[contig]:
-			cov_dic = coverage_dic[contig]
-			break
-	coverage_lookup = dict(cov_dic)
+def find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_lookup, start, end, gene,intergenic_region_size,pvalue):
 	passed_windows = 0
 	tot_windows = 0
 	if abs(end - start) > intergenic_region_size:
+		B = len(intergenic_window_coverages)
+		cumulative_coverage = sum(coverage_lookup[pos] for pos in range(start, start + intergenic_region_size))  #build once
 		while start <= end - intergenic_region_size:
-			cumulative_coverage = 0
-			coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(start, start + intergenic_region_size) if pos in coverage_lookup]
-			for pos, cov in coverage_slice_list:
-				cumulative_coverage += cov
-			# calculating average coverage of the intergenic region
-			avg_coverage = float(cumulative_coverage / (len(coverage_slice_list)))
-			background_comparison = intergenic_window_coverages
-			hits = 0
-			for cov_value in background_comparison:
-				if cov_value >= avg_coverage:
-					hits += 1
-			psig = float(hits / len(background_comparison))
+			# calculating average coverage of the window
+			avg_coverage = float(cumulative_coverage / intergenic_region_size)
+			idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
+			hits = B - idx
+			psig = float(hits / B)
 			if psig < pvalue:
 				passed_windows+=1
 			tot_windows+=1
+			cumulative_coverage += coverage_lookup[start + intergenic_region_size] - coverage_lookup[start]  #sliding the sum instead of rebuilding
 			start +=1
 		percentage_passed_windows = (float(passed_windows) / float(tot_windows))*100
 		if percentage_passed_windows <= 10:
@@ -700,7 +692,7 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 	return accelerated_tss
 
 def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
-					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene,
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
@@ -759,7 +751,6 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 			final_pos_status = True
 	print("TSS position of " + gene + ": " + str(most_upstream_pos))
 	walk_tss = most_upstream_pos
-	cov_dic = {}
 	# collect the intron positions as a set
 	intron_pos_set = set()
 	for intron_start_key, intron_end_val in intron_boundary_marker.items():
@@ -771,12 +762,6 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	basal_tss = None
 	elevated_tss = None
 	accelerated_tss = None
-
-	for contig in genes_per_chromosome:
-		if gene in genes_per_chromosome[contig]:
-			cov_dic = coverage_dic[contig]
-			break
-	coverage_lookup = dict(cov_dic)
 
 	window_starts = []
 	window_starts.append(most_upstream_pos)
@@ -1004,7 +989,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 
 
 def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
-					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene,
+					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene,
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
@@ -1063,7 +1048,6 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	print("TSS position of " + gene + ": " + str(most_downstream_pos))
 	walk_tss = most_downstream_pos
 
-	cov_dic = {}
 	# collect the intron positions as a set
 	intron_pos_set = set()
 	for intron_start_key, intron_end_val in intron_boundary_marker.items():
@@ -1076,12 +1060,6 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	elevated_tss = None
 	accelerated_tss = None
 	secondary_accelerated_tss = None
-	for contig in genes_per_chromosome:
-		if gene in genes_per_chromosome[contig]:
-			cov_dic = coverage_dic[contig]
-			break
-	coverage_lookup = dict(cov_dic)
-	coverage_lookup = dict(cov_dic)
 
 	window_starts = []
 	window_starts.append(most_downstream_pos)
@@ -2063,11 +2041,17 @@ def main( arguments ):
 				coverage_dic.update({parts[0]: [(int(parts[1]), int(parts[2]))]})
 			line = f.readline()
 
+	#convert the position-coverage tuples to dictionaries per contig for easy coverage lookup later
+	lookup_dic = {}
+	for contig in coverage_dic:
+		lookup_dic[contig] = dict(coverage_dic[contig])
+
 	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos = load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attribute )
 	genome_seq, seq_counter = load_sequences( fasta_file )
 	t_intergenic_start = time.perf_counter()
 	print(f'Retrieving intergenic background seqs')
 	intergenic_window_coverages, z_ig, ig_percent_zero, ig_percent_nonzero = get_intergenic_background_seqs(output_folder, coverage_dic, intergenic_buffer, intergenic_region_size,genes_per_chromosome, gene_infos)
+	intergenic_window_coverages = sorted(intergenic_window_coverages)#sorting the intergenic window coverages list for the downstream bisect operations
 	print(f'Completed retrieving intergenic background seqs')
 	t_intergenic_end = time.perf_counter()
 	t_intergenic_time = t_intergenic_end - t_intergenic_start
@@ -2116,6 +2100,7 @@ def main( arguments ):
 			# code block to check if the goi has annotated 5'UTR and if yes take the most upstream/ downstream 5'UTR start/ end as start or end according to + or - strand orientation
 			# Initialize with gene coordinates as default with 5'UTR checks downstream
 			start, end, orientation, contig = gene_infos[gene]['start'], gene_infos[gene]['end'], gene_infos[gene]['orientation'], gene_infos[gene]['chromosome']  # get information about gene of interest if it does not have 5'UTRs annotated
+			coverage_lookup = lookup_dic[contig]
 			# store ATG position as fixed reference before start may be modified by 5'UTR code block
 			if gene in gene_atg_dic:
 				atg_pos = gene_atg_dic[gene]
@@ -2164,7 +2149,7 @@ def main( arguments ):
 			tflank += (tflank_end - tflank_start)
 			avg_cov_gene = sum(cov_per_contig[start - 1:end]) / (end - (start - 1))  # get average coverage of the gene of interest for confidence thresholding
 			texp_start = time.perf_counter()
-			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_dic, start, end, gene, intergenic_region_size, background_percentage)
+			gene_exp_status = find_gene_exp_level(intergenic_window_coverages, genes_per_chromosome, coverage_lookup, start, end, gene, intergenic_region_size, background_percentage)
 			texp_end = time.perf_counter()
 			texp += (texp_end - texp_start)
 			gene_exp_status_dic[gene] = gene_exp_status
@@ -2208,7 +2193,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = 1
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
@@ -2264,7 +2249,7 @@ def main( arguments ):
 				else:
 					hard_cutoff = len( seq_per_contig )
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_dic, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
