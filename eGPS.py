@@ -783,13 +783,10 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 			cumulative_coverage += cov
 		# calculating average coverage of the intergenic region
 		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
-
-		background_comparison = intergenic_window_coverages
-		hits = 0
-		for cov_value in background_comparison:
-			if cov_value >= avg_coverage:
-				hits += 1
-		psig = float(hits / len(background_comparison))
+		B = len(intergenic_window_coverages)
+		idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
+		hits = B - idx
+		psig = float(hits / B)
 		if psig < pvalue:
 			print(f'psig is {psig}')
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
@@ -822,13 +819,11 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 						continue
 					for pos, cov in intron_free_coverage_slice_list:
 						cumulative_coverage += cov
-					# calculating average coverage of the intergenic region
+					# calculating average coverage of the window region
 					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
-					hits = 0
-					for cov_value in background_comparison:
-						if cov_value >= avg_coverage:
-							hits += 1
-					psig = float(hits / len(background_comparison))
+					idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
+					hits = B - idx
+					psig = float(hits / B)
 					if psig < pvalue:
 						window_pass_signal_strength += 1
 					window_pass_check += 1
@@ -1079,15 +1074,12 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 			continue
 		for pos, cov in intron_free_coverage_slice_list:
 			cumulative_coverage += cov
-		# calculating average coverage of the intergenic region
+		# calculating average coverage of the window region
 		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
-
-		background_comparison = intergenic_window_coverages
-		hits = 0
-		for cov_value in background_comparison:
-			if cov_value >= avg_coverage:
-				hits += 1
-		psig = float(hits / len(background_comparison))
+		B = len(intergenic_window_coverages)
+		idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
+		hits = B - idx
+		psig = float(hits / B)
 		if psig < pvalue:
 			print(f'psig is {psig}')
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
@@ -1122,11 +1114,10 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 						cumulative_coverage += cov
 					# calculating average coverage of the intergenic region
 					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
-					hits = 0
-					for cov_value in background_comparison:
-						if cov_value >= avg_coverage:
-							hits += 1
-					psig = float(hits / len(background_comparison))
+					B = len(intergenic_window_coverages)
+					idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
+					hits = B - idx
+					psig = float(hits / B)
 					if psig < pvalue:
 						window_pass_signal_strength += 1
 					window_pass_check += 1
