@@ -757,6 +757,55 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 		for p in range(intron_start_key, intron_end_val + 1):
 			intron_pos_set.add(p)  # collect every intronic position
 
+	# one-time prefix-sum setup, replacing per-window O(W) list rebuilds to speed up the coverage lookups and hence the overall TSS annotation efficiency
+	region_lo = most_upstream_pos
+	built_hi = region_lo  # tracks how far the arrays are currently built -- grows on demand, no longer a fixed ceiling
+
+	value_prefix = [0]  # builds incrementally now, so value_arr/count_arr as separate intermediate lists are no longer needed; #initial value of cumulative sum is fixed as 0
+	count_prefix = [0] # intial value of counts corresponding to cumualtive sum vlaue_prefix is fixed to be 0
+
+
+	def extend_prefix_to(new_hi):  # NEW
+		nonlocal built_hi
+		if new_hi <= built_hi:
+			return
+		for pos in range(built_hi, new_hi):
+			if pos in coverage_lookup and pos not in intron_pos_set:
+				value_prefix.append(value_prefix[-1] + coverage_lookup[pos])
+				count_prefix.append(count_prefix[-1] + 1)
+			else:
+				value_prefix.append(value_prefix[-1])
+				count_prefix.append(count_prefix[-1])
+		built_hi = new_hi
+
+	initial_hi = start + strength * slide_step + intergenic_region_size  # CHANGED: now just a starting guess, not a hard limit
+	extend_prefix_to(initial_hi)
+
+	def window_avg(pos0):
+		# avg_coverage for the window starting at pos0, or None if fully intronic/absent
+		lo = pos0 - region_lo
+		hi = lo + intergenic_region_size
+		if hi >= len(count_prefix):  # NEW: extend past the guess if this window needs positions not yet built
+			extend_prefix_to(region_lo + hi + 1)
+		window_count = count_prefix[hi] - count_prefix[lo]
+		if window_count == 0:
+			return None
+		return float((value_prefix[hi] - value_prefix[lo]) / window_count)
+
+	def accelerated_tss_slice(lo_pos, hi_pos):
+		# (pos, cov) list and coverage array for [lo_pos, hi_pos), excluding
+		# intronic/absent positions -- exact equivalent of the old list comprehension
+		lo = lo_pos - region_lo
+		hi = hi_pos - region_lo
+		if hi >= len(count_prefix):  # extend if this range reaches past what's built so far
+			extend_prefix_to(region_lo + hi + 1)
+		positions = np.arange(lo_pos, hi_pos)
+		values = np.diff(np.array(value_prefix[lo:hi + 1]))
+		valid = np.diff(np.array(count_prefix[lo:hi + 1])).astype(bool)
+		filtered_positions = positions[valid]
+		filtered_covs = values[valid]
+		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
+
 	# window sliding strategy to compare against background intergenic noise
 	window_pass = 0
 	basal_tss = None
@@ -766,23 +815,11 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	window_starts = []
 	window_starts.append(most_upstream_pos)
 	while most_upstream_pos <= start:
-		coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, most_upstream_pos + intergenic_region_size) if pos in coverage_lookup]
-		cumulative_coverage = 0
-		# filter intron positions using pre-computed set
-		intron_free_coverage_slice_list = [
-			(pos, cov)
-			for pos, cov in coverage_slice_list
-			if pos not in intron_pos_set
-		]
-		# guard against fully intronic window
-		if len(intron_free_coverage_slice_list) == 0:
+		avg_coverage = window_avg(most_upstream_pos)
+		if avg_coverage is None:
 			most_upstream_pos += slide_step
 			window_starts.append(most_upstream_pos)
 			continue
-		for pos, cov in intron_free_coverage_slice_list:
-			cumulative_coverage += cov
-		# calculating average coverage of the intergenic region
-		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
 		B = len(intergenic_window_coverages)
 		idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
 		hits = B - idx
@@ -792,9 +829,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
 				print("No window sliding happened. TSS based on coverage walk only.")
 				elevated_tss = most_upstream_pos
-				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
-				coverage_slice_list_for_accelerated_tss_arr = np.array(
-					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(elevated_tss, start)
 				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
 				tsr = 'NA'
 				break
@@ -804,23 +839,11 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				window_pass_check = 0
 				while window_pass_check < strength:
 					most_upstream_pos = most_upstream_pos + slide_step
-					coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_upstream_pos, most_upstream_pos + intergenic_region_size) if pos in coverage_lookup]
-					cumulative_coverage = 0
-					# filter intron positions using pre-computed set
-					intron_free_coverage_slice_list = [
-						(pos, cov)
-						for pos, cov in coverage_slice_list
-						if pos not in intron_pos_set
-					]
-					# guard against fully intronic window
-					if len(intron_free_coverage_slice_list) == 0:
+					avg_coverage = window_avg(most_upstream_pos)
+					if avg_coverage is None:
 						most_upstream_pos += slide_step
 						window_starts.append(most_upstream_pos)
 						continue
-					for pos, cov in intron_free_coverage_slice_list:
-						cumulative_coverage += cov
-					# calculating average coverage of the window region
-					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
 					idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
 					hits = B - idx
 					psig = float(hits / B)
@@ -828,9 +851,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 						window_pass_signal_strength += 1
 					window_pass_check += 1
 				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
-					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(first_most_upstream_pos, start) if pos in coverage_lookup and pos not in intron_pos_set]
-					coverage_slice_list_for_accelerated_tss_arr = np.array(
-						[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+					coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(first_most_upstream_pos, start)
 					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
 					if slide_step == 1:
 						elevated_tss = first_most_upstream_pos
@@ -1049,6 +1070,53 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 		for p in range(intron_start_key, intron_end_val + 1):
 			intron_pos_set.add(p)  # collect every intronic position
 
+	# one-time prefix-sum setup, replacing per-window O(W) list rebuilds to speed up the coverage lookups and hence the overall TSS annotation efficiency
+	region_hi = most_downstream_pos
+	built_lo = region_hi # tracks how far the arrays are currently built -- grows on demand, no longer a fixed ceiling
+
+	value_prefix = [0]#initial value of cumulative sum is fixed as 0
+	count_prefix = [0]# intial value of counts corresponding to cumualtive sum vlaue_prefix is fixed to be 0
+
+	def extend_prefix_to(new_lo):
+		nonlocal built_lo
+		if new_lo >= built_lo:
+			return
+		for pos in range(built_lo, new_lo, -1):
+			if pos in coverage_lookup and pos not in intron_pos_set:
+				value_prefix.append(value_prefix[-1] + coverage_lookup[pos])
+				count_prefix.append(count_prefix[-1] + 1)
+			else:
+				value_prefix.append(value_prefix[-1])
+				count_prefix.append(count_prefix[-1])
+		built_lo = new_lo
+
+	initial_lo = end - strength*slide_step - intergenic_region_size
+	extend_prefix_to(initial_lo)
+
+	def window_avg(pos0):
+		d = region_hi - pos0
+		hi_idx = d + intergenic_region_size
+		if hi_idx >= len(count_prefix):
+			extend_prefix_to(pos0 - intergenic_region_size)
+		window_count = count_prefix[hi_idx] - count_prefix[d]
+		if window_count == 0:
+			return None
+		return float((value_prefix[hi_idx] - value_prefix[d]) / window_count)
+
+	def accelerated_tss_slice(lo_pos, hi_pos):
+		idx_start = region_hi - hi_pos
+		idx_end = region_hi - lo_pos - 1
+		if idx_end + 1 >= len(count_prefix):
+			extend_prefix_to(lo_pos)
+		idx_range = np.arange(idx_start, idx_end + 1)
+		positions = region_hi - idx_range
+		values = np.diff(np.array(value_prefix[idx_start:idx_end + 2]))
+		valid = np.diff(np.array(count_prefix[idx_start:idx_end + 2])).astype(bool)
+		filtered_positions = positions[valid]
+		filtered_covs = values[valid]
+		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
+
+
 	# window sliding strategy to compare against background intergenic noise
 	window_pass = 0
 	basal_tss = None
@@ -1059,23 +1127,11 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 	window_starts = []
 	window_starts.append(most_downstream_pos)
 	while most_downstream_pos >= end:
-		coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos - intergenic_region_size, most_downstream_pos) if pos in coverage_lookup]
-		cumulative_coverage = 0
-		# filter intron positions using pre-computed set
-		intron_free_coverage_slice_list = [
-			(pos, cov)
-			for pos, cov in coverage_slice_list
-			if pos not in intron_pos_set
-		]
-		# guard against fully intronic window
-		if len(intron_free_coverage_slice_list) == 0:
+		avg_coverage = window_avg(most_downstream_pos)
+		if avg_coverage is None:
 			most_downstream_pos -= slide_step
 			window_starts.append(most_downstream_pos)
 			continue
-		for pos, cov in intron_free_coverage_slice_list:
-			cumulative_coverage += cov
-		# calculating average coverage of the window region
-		avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
 		B = len(intergenic_window_coverages)
 		idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
 		hits = B - idx
@@ -1085,9 +1141,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
 				print("No window sliding happened. TSS based on coverage walk only.")
 				elevated_tss = most_downstream_pos
-				coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
-				coverage_slice_list_for_accelerated_tss_arr = np.array(
-					[cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, elevated_tss)
 				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
 				tsr = 'NA'
 				break
@@ -1097,24 +1151,11 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				window_pass_check = 0
 				while window_pass_check < strength:
 					most_downstream_pos = most_downstream_pos - slide_step
-					coverage_slice_list = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos - intergenic_region_size, most_downstream_pos) if pos in coverage_lookup]
-					cumulative_coverage = 0
-					# filter intron positions using pre-computed set
-					intron_free_coverage_slice_list = [
-						(pos, cov)
-						for pos, cov in coverage_slice_list
-						if pos not in intron_pos_set
-					]
-					# guard against fully intronic window
-					if len(intron_free_coverage_slice_list) == 0:
+					avg_coverage = window_avg(most_downstream_pos)
+					if avg_coverage is None:
 						most_downstream_pos -= slide_step
 						window_starts.append(most_downstream_pos)
 						continue
-					for pos, cov in intron_free_coverage_slice_list:
-						cumulative_coverage += cov
-					# calculating average coverage of the intergenic region
-					avg_coverage = float(cumulative_coverage / (len(intron_free_coverage_slice_list)))
-					B = len(intergenic_window_coverages)
 					idx = bisect.bisect_left(intergenic_window_coverages, avg_coverage)
 					hits = B - idx
 					psig = float(hits / B)
@@ -1122,8 +1163,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 						window_pass_signal_strength += 1
 					window_pass_check += 1
 				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
-					coverage_slice_list_for_accelerated_tss = [(pos, coverage_lookup[pos]) for pos in range(most_downstream_pos, end, -1) if pos in coverage_lookup and pos not in intron_pos_set]
-					coverage_slice_list_for_accelerated_tss_arr = np.array([cov for pos, cov in coverage_slice_list_for_accelerated_tss])
+					coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, first_most_downstream_pos)
 					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
 					if slide_step == 1:
 						elevated_tss = first_most_downstream_pos
