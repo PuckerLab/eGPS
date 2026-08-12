@@ -135,7 +135,7 @@ def construct_coverage_files ( bam_list, bam_files, read_coverage_folder, bedtoo
 	else:
 		if coverage_type == 'aligned':
 			coverage_output_file = os.path.join(read_coverage_folder, 'Reads_aligned.cov')
-			print("calculating coverage per position (spanning) ....")
+			print("calculating coverage per position (aligned) ....")
 			cmd = bedtools + " -d -split -ibam " + bam_list[0] + " > " + coverage_output_file  # -include spanning reads when calculating depth
 			p = subprocess.Popen(args=cmd, shell=True)
 			p.communicate()
@@ -1759,9 +1759,9 @@ def main( arguments ):
 		m = "5000000"
 
 	if '--threads' in arguments:
-		t = arguments[arguments.index('--threads') + 1]
+		t = int(arguments[arguments.index('--threads') + 1])
 	else:
-		t = "4"
+		t = 4
 
 	if '--intron_percentile_cutoff' in arguments:
 		percentile_cut = int(arguments[arguments.index('--intron_percentile_cutoff') + 1])
@@ -1791,23 +1791,22 @@ def main( arguments ):
 				for f in files:
 					file_name = Path(f).stem #stem removes the last extension from the file name
 					sorted_bam_file = os.path.join(sorted_bam_folder,f'{file_name}_sorted.bam')
-					cmd = samtools + " sort -m " + str(m) + " --threads " + t + " " + f + " > " + sorted_bam_file
+					cmd = samtools + " sort -m " + str(m) + " --threads " + str(t) + " " + f + " > " + sorted_bam_file
 					p = subprocess.Popen(args=cmd, shell=True)
 					p.communicate()
 			else:#to handle single BAM file sorting
 				file_name = Path(bam_file).stem  # stem removes the last extension from the file name
 				sorted_bam_file = os.path.join(sorted_bam_folder, f'{file_name}_sorted.bam')
-				cmd = samtools + " sort -m " + str(m) + " --threads " + t + " " + bam_file + " > " + sorted_bam_file
+				cmd = samtools + " sort -m " + str(m) + " --threads " + str(t) + " " + bam_file + " > " + sorted_bam_file
 				p = subprocess.Popen( args= cmd, shell=True )
 				p.communicate()
 		t_cov_start = time.perf_counter()
 		bam_files = os.path.join(output_folder, 'BAM_files.txt')
-		bam_list = []
 		if os.path.isfile(bam_file):
 			if bam_sorted_status:
-				bam_list[0] = bam_file
+				bam_list = [bam_file]
 			else:
-				bam_list[0] = sorted_bam_file
+				bam_list = [sorted_bam_file]
 		elif os.path.isdir(bam_file):
 			if bam_sorted_status:
 				bam_list = [
@@ -2115,7 +2114,7 @@ def main( arguments ):
 		os.mkdir(star_indexing_folder)
 		if aligner == 'STAR':
 			# Indexing with STAR
-			cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+t+' --genomeSAindexNbases '+str(index_bases)
+			cmd = star+' --runMode genomeGenerate --genomeDir '+star_indexing_folder+' --genomeFastaFiles '+fasta_file+' --sjdbGTFfile '+gff_file+' --sjdbGTFtagExonParentTranscript Parent --runThreadN '+str(t)+' --genomeSAindexNbases '+str(index_bases)
 			p = subprocess.Popen(args=cmd, shell=True)
 			p.communicate()
 		elif aligner == 'HISAT2':
@@ -2162,7 +2161,7 @@ def main( arguments ):
 					if aligner == 'STAR':
 						#RNAseq mapping with STAR
 						prefix=os.path.join(star_mapping_folder,sample+'_')
-						cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+t+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+ str(intron_cutoff)
+						cmd = 'ulimit -n 4096 && '+star+' --runMode alignReads --genomeDir '+star_indexing_folder+' --outSAMtype BAM SortedByCoordinate --readFilesIn '+r1+' '+r2+' --runThreadN '+str(t)+' --outFileNamePrefix '+prefix+' --readFilesCommand zcat --outFilterMismatchNmax 2 --outFilterMultimapNmax 1 --alignIntronMax '+ str(intron_cutoff)
 						p = subprocess.Popen(args=cmd, shell=True)
 						p.communicate()
 					elif aligner == 'HISAT2':
