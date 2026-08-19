@@ -783,7 +783,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 					 gene_atg_dic, cds_infos,percentdiff_threshold):
 	"""! @brief run analysis on forward strand """
 
-	intron_boundary_marker = {}
+	intron_boundary_marker = {}#dictionary to collect intron boundary positions where key is donor splice site and value is acceptor splice site
 	most_upstream_pos = start
 	final_pos_status = False
 	while not final_pos_status:
@@ -793,9 +793,10 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				cov_percent_diff = ((scov_per_contig[most_upstream_pos - 2] - cov_per_contig[most_upstream_pos - 2])/scov_per_contig[most_upstream_pos - 2])*100
 			elif scov_per_contig[most_upstream_pos - 2] ==0:
 				cov_percent_diff = percentdiff_threshold #if spanning cov is zero then it is obviously not an intron. So shortcircuiting the check by assigning cov percent diff a value equal to the percent diff
-			boundary_marker = 0
+			boundary_marker = 0#this is a trick flag to mark the intron acceptor splice site position when the while loop to check percent diff begins
 			intron_acceptor_splice_site_position = None
-			hit_hard_cutoff = False
+			hit_hard_cutoff = False#this is also a trick flag to turn on hard cutoff hit if hardcutoff is reached while the walk is happening in the bounds of a likely intron territory
+			low_coverage_regime = False #trick flag to track aligned read coverage value relative to mincov in the percent diff while loop
 			while cov_percent_diff > percentdiff_threshold:#in-line intron boundary marking during the coverage walk itself
 				if boundary_marker == 0:
 					intron_acceptor_splice_site_position = most_upstream_pos - 1 # most_upstream_pos - 1 because always the coverage walk starts from CDS start for + and CDS end for - gene, so the first current position is definitiely not an intron-exon boundary. So check starts from next position onwards.
@@ -804,19 +805,22 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				if most_upstream_pos == hard_cutoff:
 					hit_hard_cutoff = True
 					break
-				if scov_per_contig[most_upstream_pos - 2] != 0:
+				if cov_per_contig[most_upstream_pos - 2] < mincov:#guard to check if aligned read coverage falls less than mincov within this percent diff checking while loop since mincov is checked only in the outer while loop
+					low_coverage_regime = True
+					break
+				if scov_per_contig[most_upstream_pos - 2] != 0:#compute the percentage cov diff in the next upstream position for the next iteration of the while loop
 					cov_percent_diff = ((scov_per_contig[most_upstream_pos - 2] - cov_per_contig[most_upstream_pos - 2]) / scov_per_contig[most_upstream_pos - 2]) * 100
 				elif scov_per_contig[most_upstream_pos - 2] == 0:
 					cov_percent_diff = percentdiff_threshold  # if spanning cov is zero then it is obviously not an intron. So shortcircuiting the check by assigning cov percent diff a value equal to the percent diff
 			if hit_hard_cutoff == True:#skip crossing the intron block when hard cutoff is already reached while marking the intron boundaries
 				final_pos_status = True
-			elif intron_acceptor_splice_site_position is not None:
-				intron_donor_splice_site_position = most_upstream_pos - 1
+			elif intron_acceptor_splice_site_position is not None and low_coverage_regime == False:
+				intron_donor_splice_site_position = most_upstream_pos# the intron marking loop already checks percent difference in the next upstream pos. so the while loop must have exited when the next upstream pos did not satisfy the percent criteria. therefore the intron boundary should be most_upstream_pos and not most_upstream_pos -1 which is the position that did not satisfy the percent diff condition to stay in the while loop
 				avg_gap_coverage = sum(scov_per_contig[intron_donor_splice_site_position - 1:intron_acceptor_splice_site_position - 1]) / (intron_acceptor_splice_site_position - intron_donor_splice_site_position)
-				if avg_gap_coverage > mincov:
+				if most_upstream_pos > min_exon_size and avg_gap_coverage > mincov:#avg spanning gap coverage should be greater than mincov and most upstream pos should be greater than min exon size. matters for first contig end
 					# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 					donor_splice_site = seq_per_contig[intron_donor_splice_site_position - 1:intron_donor_splice_site_position + 1].upper()  # this should be GT for it to be canonical splice site
-					acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 3:intron_acceptor_splice_site_position - 1].upper()  # this should be AG for it to be canonical splice site
+					acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 2:intron_acceptor_splice_site_position].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
 					if splicesites == "off":  # ignore check for canonical splice sites #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
 						if intron_acceptor_splice_site_position - intron_donor_splice_site_position < tolerated_gap:
 							intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
@@ -825,27 +829,79 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 							most_upstream_pos = most_upstream_pos - 1
 					elif donor_splice_site == "GT" and acceptor_splice_site == "AG":
 						print(f"Canonical donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site + '\n')
-						print(f"Canonical acceptor splice site starting at {intron_acceptor_splice_site_position}: " + acceptor_splice_site + '\n')
+						print(f"Canonical acceptor splice site ending at {intron_acceptor_splice_site_position}: " + acceptor_splice_site + '\n')
 						intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
 						most_upstream_pos = most_upstream_pos - 1
 					elif donor_splice_site != "GT" or acceptor_splice_site != "AG":#tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
 						print(f"Warning! Either one or both the donor and acceptor splice sites are non-canonical."+ '\n')
 						print(f"Donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site+ '\n')
-						print(f"Acceptor splice site starting at {intron_acceptor_splice_site_position}: " + acceptor_splice_site+ '\n')
+						print(f"Acceptor splice site ending at {intron_acceptor_splice_site_position}: " + acceptor_splice_site+ '\n')
 						if intron_acceptor_splice_site_position - intron_donor_splice_site_position < tolerated_gap:
 							intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
 							most_upstream_pos = most_upstream_pos - 1
 						else:#if non canonical splice sites show up and tolerated gap check fails, don't mark intron boundaries. just walk
-							#intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
 							most_upstream_pos = most_upstream_pos - 1
 				else:
 					final_pos_status = True
 			else:
-				most_upstream_pos -= 1  # move one step upstream
+				"""
+				#the following additional check is placed here since the percent diff while loop exits with a break when the next upstream position is less than mincov; if i walk upstream here again then i would be walking one more base than 
+				I should have and the outer while loop will not look at the same next upstream position that was looked at by the percent diff and would be looking at the next upstream position instead
+				"""
+				if low_coverage_regime == False:
+					most_upstream_pos -= 1  # move one step upstream
+				else:
+					pass
 			if most_upstream_pos == hard_cutoff:  # stop if end of upstream contig/pseudochromosome is reached
 				break
+		print(f'most upstream pos is {most_upstream_pos}')
 
 		# --- try to cross intron --- #
+		"""
+		#this block to fires when block one while loop exits due to cov being less than mincov
+		#the intron crossing logic is repeated here again similar to the above block with the moving variable current_position and fixed variable most_upstream_position
+		to specifically catch cases where the cov is exactly 0 in the intron region while spanning cov is finite for a default mincov of 1
+		"""
+		current_position = most_upstream_pos - 1
+		if current_position > hard_cutoff:
+			while cov_per_contig[ current_position - 2 ] < mincov:#check if upstream position has low coverage
+				current_position -= 1
+				if current_position == hard_cutoff:
+					break
+			print(f'current position is {current_position}')
+			print(f'most upstream position is {most_upstream_pos}')
+			avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
+			#average coverage in intron should be very low
+			if current_position > min_exon_size and avg_gap_coverage > mincov:
+			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
+				donor_splice_site = seq_per_contig[current_position - 1:current_position + 1].upper()  # this should be GT for it to be canonical splice site
+				acceptor_splice_site = seq_per_contig[most_upstream_pos - 2:most_upstream_pos].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
+				if splicesites == "off":  # ignore check for canonical splice sites #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
+					if most_upstream_pos - current_position < tolerated_gap:
+						intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
+						most_upstream_pos = current_position - 1
+					else:#if splice sites off and tolerated gap check fails, make final pos status true; making the check stringent for the loop with cov less than mincov
+						final_pos_status = True
+				elif donor_splice_site == "GT" and acceptor_splice_site == "AG":
+					print(f"Canonical donor splice site starting at {current_position}: " + donor_splice_site + '\n')
+					print(f"Canonical acceptor splice site ending at {most_upstream_pos}: " + acceptor_splice_site + '\n')
+					intron_boundary_marker[current_position] = most_upstream_pos
+					most_upstream_pos = current_position - 1
+				elif donor_splice_site != "GT" or acceptor_splice_site != "AG":#tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
+					print(f"Warning! Either one or both the donor and acceptor splice sites are non-canonical."+ '\n')
+					print(f"Donor splice site starting at {current_position}: " + donor_splice_site+ '\n')
+					print(f"Acceptor splice site ending at {most_upstream_pos}: " + acceptor_splice_site+ '\n')
+					if most_upstream_pos - current_position < tolerated_gap:
+						intron_boundary_marker[current_position] = most_upstream_pos
+						most_upstream_pos = current_position - 1
+					else:#if non canonical splice sites show up and tolerated gap check fails, make final pos status true; making the check stringent for the loop with cov less than mincov
+						final_pos_status = True
+		else:
+			final_pos_status = True
+
+
+
+		"""
 		current_position = most_upstream_pos - 1  # most_upstream_pos has coverage above cutoff (position, not index!)
 		if current_position > hard_cutoff:
 			while cov_per_contig[current_position - 2] < mincov:  # check if upstream position has low coverage #the intron cross code block is repeated here because the above while loop exits if the intron position has zero coverage as minocv by default is 1
@@ -872,12 +928,13 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 					most_upstream_pos = current_position
 					final_pos_status = True
 				elif intron_acceptor_splice_site_position is not None:
-					intron_donor_splice_site_position = current_position - 1
+					intron_donor_splice_site_position = current_position# the intron marking loop already checks percent difference in the next current pos. so the while loop must have exited when the next current pos did not satisfy the percent criteria. therefore the intron boundary should be current pos and not current pos -1 which is the position that did not satisfy the percent diff condition to stay in the while loop
 					avg_gap_coverage = sum(scov_per_contig[intron_donor_splice_site_position - 1:intron_acceptor_splice_site_position - 1]) / (intron_acceptor_splice_site_position - intron_donor_splice_site_position)
-					if avg_gap_coverage > mincov:
+					print(f'avg_gap_coverage: {avg_gap_coverage}')
+					if current_position > min_exon_size and avg_gap_coverage > mincov:
 						# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 						donor_splice_site = seq_per_contig[intron_donor_splice_site_position - 1:intron_donor_splice_site_position + 1].upper()  # this should be GT for it to be canonical splice site
-						acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 3:intron_acceptor_splice_site_position - 1].upper()  # this should be AG for it to be canonical splice site
+						acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 2:intron_acceptor_splice_site_position].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
 						if splicesites == "off":  # ignore check for canonical splice sites #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
 							if intron_acceptor_splice_site_position - intron_donor_splice_site_position < tolerated_gap:
 								intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
@@ -909,6 +966,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 					break
 		else:
 			final_pos_status = True
+		"""
 
 	print("TSS position of " + gene + ": " + str(most_upstream_pos))
 	walk_tss = most_upstream_pos
@@ -2441,6 +2499,7 @@ def main( arguments ):
 
 				else:
 					hard_cutoff = 1
+				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_fwd_analysis( ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold )
 				tanalysis_end = time.perf_counter()
@@ -2497,6 +2556,7 @@ def main( arguments ):
 					hard_cutoff = gene_infos[ downstream_gene ]['start']
 				else:
 					hard_cutoff = len( seq_per_contig )
+				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
 				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
 				tanalysis_end = time.perf_counter()
