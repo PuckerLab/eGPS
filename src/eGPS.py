@@ -249,10 +249,16 @@ def load_gene_infos( gff_file, child_attribute, child_parent_linker, parent_attr
 					except KeyError:
 						transcripts_per_gene.update( { Parent: [ ID ] } )
 				if parts[2].upper() == 'FIVE_PRIME_UTR':
-					Parent = parts[-1].split(f'{child_parent_linker}=')[-1]#Parent of 5'UTR is transcript
-					if ";" in Parent:
-						Parent = Parent.split(';')[0]
-					five_utr_infos.update({ Parent: { 'chromosome': parts[0], 'start': int( parts[3] ), 'end': int( parts[4] ), 'orientation': parts[6] } })# key of this nested dictionary is the transcript name
+					utr_parents = parts[-1].split(f'{child_parent_linker}=')[-1]#Parent of 5'UTR is transcript
+					if ";" in utr_parents:
+						utr_parents = utr_parents.split(';')[0]
+					for utr_parent in utr_parents.split(','): #handle multiple parents
+						utr_parent = utr_parent.strip()
+						utr_tuple = (int(parts[3]), int(parts[4]))
+						try:
+							five_utr_infos[ utr_parent ].append(utr_tuple)
+						except KeyError:
+							five_utr_infos[ utr_parent ] = [utr_tuple]
 				if parts[2].upper() == 'CDS':
 					cds_parents = parts[-1].split(f'{child_parent_linker}=')[-1]
 					if ";" in cds_parents:
@@ -576,49 +582,60 @@ def generate_plot( values, svalues, fig_file, atg_pos, cov_walk_start, boundary_
 	# feature track plotting with features represented as arrows
 	for mrna_start, mrna_end in mrnas_to_plot:
 		feature_length = mrna_end - mrna_start
-		if orientation == '+':
-			dx = feature_length
-			x_origin = mrna_start
-			xdot_origin = boundary_tss_for_plot
-			predicted_tss_mrna_feature = mrna_end - boundary_tss_for_plot
-		elif orientation == '-':
-			dx = -feature_length
-			x_origin = mrna_end
-			xdot_origin = boundary_tss_for_plot
-			predicted_tss_mrna_feature = -(boundary_tss_for_plot - mrna_start)
-		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=x_origin, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='steelblue', alpha=0.5, edgecolor='black', linewidth=0.5)
-		ax_features.add_patch(arrow)
-		dotted_arrow = FancyArrow(x=xdot_origin, y=0.2, dx=predicted_tss_mrna_feature, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='none', alpha=0.5, edgecolor='steelblue', linewidth=0.5, linestyle='dotted')
-		ax_features.add_patch(dotted_arrow)
+		if feature_length != 0:
+			if orientation == '+':
+				dx = feature_length
+				x_origin = mrna_start
+				xdot_origin = boundary_tss_for_plot
+				predicted_tss_mrna_feature = mrna_end - boundary_tss_for_plot
+			elif orientation == '-':
+				dx = -feature_length
+				x_origin = mrna_end
+				xdot_origin = boundary_tss_for_plot
+				predicted_tss_mrna_feature = -(boundary_tss_for_plot - mrna_start)
+			head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+			arrow = FancyArrow(x=x_origin, y=0.2, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=head_length, length_includes_head=True, facecolor='steelblue', alpha=0.5, edgecolor='black', linewidth=0.5)
+			ax_features.add_patch(arrow)
+			"""
+			if predicted_tss_mrna_feature != 0:
+				dotted_head_length = min(50, (abs(predicted_tss_mrna_feature)*0.2))
+				dotted_arrow = FancyArrow(x=xdot_origin, y=0.2, dx=predicted_tss_mrna_feature, dy=0, width=0.2, head_width=0.3, head_length=dotted_head_length , length_includes_head=True, facecolor='none', alpha=0.5, edgecolor='steelblue', linewidth=0.5, linestyle='dotted')
+				ax_features.add_patch(dotted_arrow)
+			"""
 	for cds_start, cds_end in cds_to_plot:
 		feature_length = cds_end - cds_start
-		if orientation == '+':
-			dx = feature_length
-			x_origin = cds_start
-		elif orientation == '-':
-			dx = -feature_length
-			x_origin = cds_end
-		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=x_origin, y=0.5, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='lightgreen', alpha=0.5, edgecolor='black', linewidth=0.5)
-		ax_features.add_patch(arrow)
+		if feature_length != 0:
+			if orientation == '+':
+				dx = feature_length
+				x_origin = cds_start
+			elif orientation == '-':
+				dx = -feature_length
+				x_origin = cds_end
+			head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+			arrow = FancyArrow(x=x_origin, y=0.5, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=head_length, length_includes_head=True, facecolor='lightgreen', alpha=0.5, edgecolor='black', linewidth=0.5)
+			ax_features.add_patch(arrow)
 	for five_utr_start, five_utr_end in five_utr_to_plot:
 		feature_length = five_utr_end - five_utr_start
-		if orientation == '+':
-			dx = feature_length
-			x_origin = five_utr_start
-			xdot_origin = boundary_tss_for_plot
-			predicted_tss_five_utr_feature = five_utr_end - boundary_tss_for_plot
-		elif orientation == '-':
-			dx = -feature_length
-			x_origin = five_utr_end
-			xdot_origin = boundary_tss_for_plot
-			predicted_tss_five_utr_feature = -(boundary_tss_for_plot - five_utr_start)
-		head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
-		arrow = FancyArrow(x=x_origin, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length=20, length_includes_head=True, facecolor='salmon', alpha=0.5, edgecolor='black', linewidth=0.5)
-		ax_features.add_patch(arrow)
-		dotted_arrow = FancyArrow(x=xdot_origin, y=0.8, dx=predicted_tss_five_utr_feature, dy=0, width=0.2, head_width=0.3,head_length=20, length_includes_head=True, facecolor='none', alpha=0.5,edgecolor='salmon', linewidth=0.5, linestyle='dotted')
-		ax_features.add_patch(dotted_arrow)
+		if feature_length != 0:
+			if orientation == '+':
+				dx = feature_length
+				x_origin = five_utr_start
+				xdot_origin = boundary_tss_for_plot
+				predicted_tss_five_utr_feature = five_utr_end - boundary_tss_for_plot
+			elif orientation == '-':
+				dx = -feature_length
+				x_origin = five_utr_end
+				xdot_origin = boundary_tss_for_plot
+				predicted_tss_five_utr_feature = -(boundary_tss_for_plot - five_utr_start)
+			head_length = min(50, feature_length * 0.2)  # cap arrowhead at 20% of feature width
+			arrow = FancyArrow(x=x_origin, y=0.8, dx=dx, dy=0, width=0.2, head_width=0.3, head_length = head_length, length_includes_head=True, facecolor='salmon', alpha=0.5, edgecolor='black', linewidth=0.5)
+			ax_features.add_patch(arrow)
+			"""
+			if predicted_tss_five_utr_feature != 0:
+				dotted_head_length = min(50, (abs(predicted_tss_five_utr_feature) * 0.2))
+				dotted_arrow = FancyArrow(x=xdot_origin, y=0.8, dx=predicted_tss_five_utr_feature, dy=0, width=0.2, head_width=0.3,head_length=dotted_head_length, length_includes_head=True, facecolor='none', alpha=0.5,edgecolor='salmon', linewidth=0.5, linestyle='dotted')
+				ax_features.add_patch(dotted_arrow)
+			"""
 	if introns_to_plot:
 		for intron_start, intron_end in introns_to_plot:
 			ax_features.plot(
@@ -899,75 +916,6 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 		else:
 			final_pos_status = True
 
-
-
-		"""
-		current_position = most_upstream_pos - 1  # most_upstream_pos has coverage above cutoff (position, not index!)
-		if current_position > hard_cutoff:
-			while cov_per_contig[current_position - 2] < mincov:  # check if upstream position has low coverage #the intron cross code block is repeated here because the above while loop exits if the intron position has zero coverage as minocv by default is 1
-				if scov_per_contig[current_position - 2] != 0:
-					cov_percent_diff = ((scov_per_contig[current_position - 2] - cov_per_contig[current_position - 2]) / scov_per_contig[current_position - 2]) * 100
-				elif scov_per_contig[current_position - 2] == 0:
-					cov_percent_diff = percentdiff_threshold  # if spanning cov is zero then it is obviously not an intron. So shortcircuiting the check by assigning cov percent diff a value equal to the percent diff
-				boundary_marker = 0
-				intron_acceptor_splice_site_position = None
-				hit_hard_cutoff = False
-				while cov_percent_diff > percentdiff_threshold:  # in-line intron boundary marking during the coverage walk itself
-					if boundary_marker == 0:
-						intron_acceptor_splice_site_position = current_position - 1  # current_position - 1 because always the coverage walk starts from CDS start for + and CDS end for - gene, so the first current position is definitiely not an intron-exon boundary. So check starts from next position onwards.
-						boundary_marker = 1
-					current_position -= 1  # move one step upstream
-					if current_position == hard_cutoff:
-						hit_hard_cutoff = True
-						break
-					if scov_per_contig[current_position - 2] != 0:
-						cov_percent_diff = ((scov_per_contig[current_position - 2] - cov_per_contig[current_position - 2]) / scov_per_contig[current_position - 2]) * 100
-					elif scov_per_contig[current_position - 2] == 0:
-						cov_percent_diff = percentdiff_threshold  # if spanning cov is zero then it is obviously not an intron. So shortcircuiting the check by assigning cov percent diff a value equal to the percent diff
-				if hit_hard_cutoff == True:
-					most_upstream_pos = current_position
-					final_pos_status = True
-				elif intron_acceptor_splice_site_position is not None:
-					intron_donor_splice_site_position = current_position# the intron marking loop already checks percent difference in the next current pos. so the while loop must have exited when the next current pos did not satisfy the percent criteria. therefore the intron boundary should be current pos and not current pos -1 which is the position that did not satisfy the percent diff condition to stay in the while loop
-					avg_gap_coverage = sum(scov_per_contig[intron_donor_splice_site_position - 1:intron_acceptor_splice_site_position - 1]) / (intron_acceptor_splice_site_position - intron_donor_splice_site_position)
-					print(f'avg_gap_coverage: {avg_gap_coverage}')
-					if current_position > min_exon_size and avg_gap_coverage > mincov:
-						# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-						donor_splice_site = seq_per_contig[intron_donor_splice_site_position - 1:intron_donor_splice_site_position + 1].upper()  # this should be GT for it to be canonical splice site
-						acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 2:intron_acceptor_splice_site_position].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
-						if splicesites == "off":  # ignore check for canonical splice sites #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
-							if intron_acceptor_splice_site_position - intron_donor_splice_site_position < tolerated_gap:
-								intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
-								most_upstream_pos = current_position - 1
-							else:#if splice sites off and tolerated gap check fails don't mark intron boundaries and just walk. most_upstream_pos = current_position is to update the most_upstream_pos value to the current value i.e. to sync them after a non-validated intron cross
-								current_position = current_position - 1
-								most_upstream_pos = current_position
-						elif donor_splice_site == "GT" and acceptor_splice_site == "AG":
-							print(f"Canonical donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site+ '\n')
-							print(f"Canonical acceptor splice site starting at {intron_acceptor_splice_site_position}: " + acceptor_splice_site+ '\n')
-							intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
-							most_upstream_pos = current_position - 1
-						elif donor_splice_site != "GT" or acceptor_splice_site != "AG": #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
-							print(f"Warning! Either one or both the donor and acceptor splice sites are non-canonical."+ '\n')
-							print(f"Donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site+ '\n')
-							print(f"Acceptor splice site starting at {intron_acceptor_splice_site_position}: " + acceptor_splice_site+ '\n')
-							if intron_acceptor_splice_site_position - intron_donor_splice_site_position < tolerated_gap:
-								intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
-								most_upstream_pos = current_position - 1
-							else:  # if non-canonical splice sites show up and tolerated gap check fails don't mark intron boundaries and just walk. most_upstream_pos = current_position is to update the most_upstream_pos value to the current value i.e. to sync them after a non-validated intron cross
-								current_position = current_position - 1
-								most_upstream_pos = current_position
-					else:
-						final_pos_status = True
-				else:
-					current_position -= 1  # move one step upstream
-					most_upstream_pos = current_position
-				if current_position == hard_cutoff:
-					break
-		else:
-			final_pos_status = True
-		"""
-
 	print("TSS position of " + gene + ": " + str(most_upstream_pos))
 	walk_tss = most_upstream_pos
 	# collect the intron positions as a set
@@ -1124,7 +1072,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 		if each in cds_infos:
 			cds_dic[each] = cds_infos[each]
 		if each in five_utr_infos:
-			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
+			five_utr_dic[each] = (five_utr_infos[each])
 	if starting_tss_for_plot > flank_region_for_plot:
 		plot_start_region = starting_tss_for_plot - flank_region_for_plot
 	else:
@@ -1145,8 +1093,7 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				mrnas_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	for transcript, cds_list in cds_dic.items():
-		for (cds_start,
-			 cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
+		for (cds_start,cds_end) in cds_list:  # two level loop for cds_dic alone since cds_dic structure is a list of tuples per transcript similar to the cds_infos structure from which it is derived
 			if cds_end >= plot_start_region and cds_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
 				if cds_start >= plot_start_region and cds_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
 					cds_to_plot.append(((cds_start - plot_start_region), (cds_end - plot_start_region)))
@@ -1157,16 +1104,17 @@ def run_fwd_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				elif cds_start <= plot_start_region and cds_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
 
-	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
-		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
-			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
-				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
-			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
-				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+	for transcript, five_utr_list in five_utr_dic.items():
+		for (five_utr_start, five_utr_end) in five_utr_list: # two level loop for five_utr_dic alone since five_utr_dic structure is a list of tuples per transcript similar to the five_utr_infos structure from which it is derived
+			if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+				if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
+					five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
+				elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
+					five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
+				elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+					five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
+				elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+					five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	introns_to_plot = []
 	for intron_start_key, intron_end_val in intron_boundary_marker.items():
@@ -1229,19 +1177,80 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos):
+					 gene_atg_dic, cds_infos, percentdiff_threshold):
 	"""! @brief run analysis on reverse strand """
+	print(f'aligned coverage at 12006082 is {cov_per_contig[12006081]}')
+	print(f'spanning coverage at 12006082 is {scov_per_contig[12006081]}')
+	print(f'aligned coverage at 12006083 is {cov_per_contig[12006082]}')
+	print(f'spanning coverage at 12006083 is {scov_per_contig[12006082]}')
 	intron_boundary_marker = {}
 	most_downstream_pos = end
 	final_pos_status = False
 	while not final_pos_status:
-
 		# --- walk coverage upstream of transcription start while there is coverage --- #
-		while cov_per_contig[
-			most_downstream_pos] >= mincov:  # index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
-			most_downstream_pos += 1  # move one step downstream
+		while cov_per_contig[most_downstream_pos] >= mincov:  # index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
+			if scov_per_contig[most_downstream_pos] != 0:
+				cov_percent_diff = ((scov_per_contig[most_downstream_pos] - cov_per_contig[most_downstream_pos])/scov_per_contig[most_downstream_pos])*100
+			else:
+				cov_percent_diff = percentdiff_threshold
+			boundary_marker = 0
+			intron_acceptor_splice_site_position = None
+			hit_hard_cutoff = False
+			low_coverage_regime = False
+			while cov_percent_diff > percentdiff_threshold:
+				if boundary_marker == 0:
+					print(f"position entering intron check loop is {most_downstream_pos}")
+					intron_acceptor_splice_site_position = most_downstream_pos + 1
+					boundary_marker = 1
+				most_downstream_pos += 1
+				if most_downstream_pos == hard_cutoff:
+					hit_hard_cutoff = True
+					break
+				if cov_per_contig[most_downstream_pos] < mincov:
+					low_coverage_regime = True
+					break
+				if scov_per_contig[most_downstream_pos] != 0:
+					cov_percent_diff = ((scov_per_contig[most_downstream_pos] - cov_per_contig[most_downstream_pos]) / scov_per_contig[most_downstream_pos]) * 100
+				elif scov_per_contig[most_downstream_pos] == 0:
+					cov_percent_diff = percentdiff_threshold
+			if hit_hard_cutoff == True:
+				final_pos_status = True
+			elif intron_acceptor_splice_site_position is not None and low_coverage_regime == False:
+				intron_donor_splice_site_position = most_downstream_pos
+				avg_gap_coverage = sum(scov_per_contig[intron_acceptor_splice_site_position - 1:intron_donor_splice_site_position - 1]) / (intron_donor_splice_site_position - intron_acceptor_splice_site_position)
+				if most_downstream_pos < (len(seq_per_contig) - min_exon_size) and avg_gap_coverage > mincov:
+					donor_splice_site = seq_per_contig[intron_donor_splice_site_position - 2:intron_donor_splice_site_position].upper()
+					acceptor_splice_site = seq_per_contig[intron_acceptor_splice_site_position - 1:intron_acceptor_splice_site_position + 1].upper()
+					if splicesites == "off":
+						if intron_donor_splice_site_position - intron_acceptor_splice_site_position < tolerated_gap:
+							intron_boundary_marker[intron_acceptor_splice_site_position] = intron_donor_splice_site_position #the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+							most_downstream_pos += 1
+						else:
+							most_downstream_pos += 1
+					elif donor_splice_site == 'AC' and acceptor_splice_site == "CT":
+						print(f" Canonical donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site + '\n')
+						print(f" Canonical acceptor splice site ending at {intron_acceptor_splice_site_position}: " + acceptor_splice_site + '\n')
+						intron_boundary_marker[intron_acceptor_splice_site_position] = intron_donor_splice_site_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+						most_downstream_pos += 1
+					elif donor_splice_site != 'AC' or acceptor_splice_site != "CT":
+						print(f"Warning! Either one or both the donor and acceptor splice sites are non-canonical." + '\n')
+						print(f"Donor splice site starting at {intron_donor_splice_site_position}: " + donor_splice_site + '\n')
+						print(f"Acceptor splice site ending at {intron_acceptor_splice_site_position}: " + acceptor_splice_site + '\n')
+						if intron_donor_splice_site_position - intron_acceptor_splice_site_position < tolerated_gap:
+							intron_boundary_marker[intron_acceptor_splice_site_position] = intron_donor_splice_site_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+							most_downstream_pos += 1
+						else:
+							most_downstream_pos += 1
+				else:
+					final_pos_status = True
+			else:
+				if low_coverage_regime == False:
+					most_downstream_pos += 1
+				else:
+					pass
 			if most_downstream_pos == hard_cutoff:  # stop if end of contig/pseudochromosome is reached
 				break
+		print(f'most downstream pos is {most_downstream_pos}')
 
 		# --- try to cross intron --- #
 		current_position = most_downstream_pos + 1  # most_downstream_pos has coverage above cutoff (position, not index!)
@@ -1250,37 +1259,35 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				current_position += 1  # move one step downstream
 				if current_position == hard_cutoff:
 					break
+			print(f'current position is {current_position}')
+			print(f'most downstream position is {most_downstream_pos}')
+			avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos-1 : current_position-1 ] )/(current_position - most_downstream_pos)
+			if current_position < (len(seq_per_contig) - min_exon_size) and avg_gap_coverage > mincov:
+				donor_splice_site = seq_per_contig[current_position - 2:current_position].upper()
+				acceptor_splice_site = seq_per_contig[most_downstream_pos - 1:most_downstream_pos + 1].upper()
+				if splicesites == "off":
+					if current_position - most_downstream_pos < tolerated_gap:
+						intron_boundary_marker[most_downstream_pos] = current_position #the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+						most_downstream_pos = current_position + 1
+					else:
+						final_pos_status = True
+				elif donor_splice_site == 'AC' and acceptor_splice_site == "CT":
+					print(f"Low coverage regime: Canonical donor splice site starting at {current_position}: " + donor_splice_site + '\n')
+					print(f"Low coverage regime: Canonical acceptor splice site ending at {most_downstream_pos}: " + acceptor_splice_site + '\n')
+					intron_boundary_marker[most_downstream_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+					most_downstream_pos = current_position + 1
+				elif donor_splice_site != 'AC' or acceptor_splice_site != "CT":
+					print(f"Low coverage regime: Warning! Either one or both the donor and acceptor splice sites are non-canonical." + '\n')
+					print(f"Low coverage regime: Donor splice site starting at {current_position}: " + donor_splice_site + '\n')
+					print(f"Low coverage regime: Acceptor splice site ending at {most_downstream_pos}: " + acceptor_splice_site + '\n')
+					if current_position - most_downstream_pos < tolerated_gap:
+						intron_boundary_marker[most_downstream_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+						most_downstream_pos += 1
+					else:
+						final_pos_status = True
 		else:
 			final_pos_status = True
 
-		avg_gap_coverage = sum(scov_per_contig[most_downstream_pos - 1:current_position - 1]) / (current_position - most_downstream_pos)
-		# average coverage in intron should be very low
-		if current_position < (len(seq_per_contig) - min_exon_size) and avg_gap_coverage > mincov:
-			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
-			acceptor_splice_site = seq_per_contig[most_downstream_pos - 1:most_downstream_pos + 1]  # CT
-			donor_splice_site = seq_per_contig[current_position - 3:current_position - 1]  # AC
-			if donor_splice_site == "AC" and acceptor_splice_site == "CT":  # reverse sequences of GT-AG
-				print("donor splice site: " + donor_splice_site)
-				print("acceptor splice site: " + acceptor_splice_site)
-				intron_start = most_downstream_pos
-				intron_end = current_position - 1
-				intron_boundary_marker[intron_start] = intron_end
-				most_downstream_pos = current_position + 1
-			elif donor_splice_site == "GC" and acceptor_splice_site == "CT":
-				print("Non-canonical donor splice site: " + donor_splice_site)
-				print("Non-canonical acceptor splice site: " + acceptor_splice_site)
-				intron_start = most_downstream_pos
-				intron_end = current_position - 1
-				intron_boundary_marker[intron_start] = intron_end
-				most_downstream_pos = current_position + 1
-			elif splicesites == "off":  # ignore check for canonical splice sites
-				most_downstream_pos = current_position + 1
-			elif current_position - most_downstream_pos < tolerated_gap:
-				most_downstream_pos = current_position + 1
-			else:
-				final_pos_status = True
-		else:
-			final_pos_status = True
 	print("TSS position of " + gene + ": " + str(most_downstream_pos))
 	walk_tss = most_downstream_pos
 
@@ -1434,7 +1441,7 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 		if each in cds_infos:
 			cds_dic[each] = cds_infos[each]
 		if each in five_utr_infos:
-			five_utr_dic[each] = (five_utr_infos[each]['start'], five_utr_infos[each]['end'])
+			five_utr_dic[each] = (five_utr_infos[each])
 	plot_start_region = min(end - flank_region_for_plot, atg_genomic_pos - flank_region_for_plot)
 	if end_tss_for_plot < (len(seq_per_contig) - flank_region_for_plot):
 		plot_end_region = end_tss_for_plot + flank_region_for_plot
@@ -1468,16 +1475,17 @@ def run_rev_analysis(ks_pval, strength, lookahead, output_folder, pvalue,
 				elif cds_start <= plot_start_region and cds_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
 					cds_to_plot.append((0, (plot_end_region - plot_start_region)))
 
-	for transcript, (five_utr_start, five_utr_end) in five_utr_dic.items():
-		if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
-			if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
-				five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
-			elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
-				five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
-			elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
-				five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
+	for transcript, five_utr_list in five_utr_dic.items():
+		for (five_utr_start,five_utr_end) in five_utr_list:  # two level loop for five_utr_dic alone since five_utr_dic structure is a list of tuples per transcript similar to the five_utr_infos structure from which it is derived
+			if five_utr_end >= plot_start_region and five_utr_start <= plot_end_region:  # primary check to see if feature is within the bounds of the plot
+				if five_utr_start >= plot_start_region and five_utr_end <= plot_end_region:  # case1 where feature is entirely within the plot bounds
+					five_utr_to_plot.append(((five_utr_start - plot_start_region), (five_utr_end - plot_start_region)))
+				elif five_utr_start <= plot_start_region and five_utr_end <= plot_end_region:  # case2 where feature start is out of the plot bounds
+					five_utr_to_plot.append((0, (five_utr_end - plot_start_region)))
+				elif five_utr_start >= plot_start_region and five_utr_end >= plot_end_region:  # case3 where feature end is out of the plot bounds
+					five_utr_to_plot.append(((five_utr_start - plot_start_region), (plot_end_region - plot_start_region)))
+				elif five_utr_start <= plot_start_region and five_utr_end >= plot_end_region:  # case4 where both feature start and end are out of the plot bounds making the feature span the entire plot boundary
+					five_utr_to_plot.append((0, (plot_end_region - plot_start_region)))
 
 	introns_to_plot = []
 	for intron_start_key, intron_end_val in intron_boundary_marker.items():
@@ -2418,12 +2426,12 @@ def main( arguments ):
 				for each in transcript_list:
 					if coverage_walk_origin == 'utr':
 						if each in five_utr_infos and gene_infos[gene]['orientation'] == '+' and each == transcript_list[0]:
-							start = five_utr_infos[each]['start']  # in case a gene has transcripts with 5'UTR annotated, the most upstream 5'UTR will be taken as the start for the + strand gene
+							start = min(utr_start for utr_start, utr_end in five_utr_infos[each])   # in case a gene has transcripts with 5'UTR annotated, the most upstream 5'UTR start will be taken as the walk start for the + strand gene
 							end, orientation = gene_infos[gene]['end'], gene_infos[gene]['orientation']  # get information about gene of interest
 							five_utr_dic[gene] = f"5'UTR start of {each} used for TSS prediction."
 							break
 						elif each in five_utr_infos and gene_infos[gene]['orientation'] == '-' and each == transcript_list[-1]:
-							end = five_utr_infos[each]['end']  # in case a gene has transcripts with 5'UTR annotated, the most downstream 5'UTR will be taken as the start for the - strand gene
+							end = max(utr_end for utr_start, utr_end in five_utr_infos[each])  # in case a gene has transcripts with 5'UTR annotated, the most downstream 5'UTR end will be taken as the start for the - strand gene coverage walk
 							start, orientation = gene_infos[gene]['start'], gene_infos[gene]['orientation']  # get information about gene of interest
 							five_utr_dic[gene] = f"5'UTR end of {each} used for TSS prediction."
 							break
@@ -2558,7 +2566,7 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant = run_rev_analysis( ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant]
