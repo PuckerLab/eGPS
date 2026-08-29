@@ -47,6 +47,8 @@ conda env create -f environment.yml
 
 conda activate egps
 
+cd src
+
 ```
 
 ## Usage
@@ -55,28 +57,41 @@ conda activate egps
 ```
 Usage:
 
-  python3 eGPS.py [--sra_folder <READ_FILES> | --bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] \
+  python3 eGPS.py --goi <TXT_FILE> [--sra_folder <READ_FILES> | --bam <BAM_FILE> | --cov <COV_FILE> --scov <SCOV_FILE> ] \
                   --fasta <FASTA_FILE> --gff <GFF_FILE> --out <DIR>
 
 Mandatory:
 
-  --sra_folder                STR       Folder encompassing sub-folders of SRA files
+--goi                         STR      <TXT file with genes of interest; one per line>
+
+
+--sra_folder                  STR       Folder encompassing sub-folders of SRA files
                                         for RNA-seq mapping
 
-  --cov                       STR       Aligned bases coverage file (COV)
+--cov                         STR       Aligned bases coverage file/ folder (COV)
 
-  --scov                      STR       Spanning read coverage file (COV)
+--scov                        STR       Spanning read coverage file/ folder (COV)
 
-  --bam                       STR       BAM file to automatically create the
-                                        coverage file
+--bam                         STR       BAM file/ folder to automatically create the
+                                        coverage file(s)
 
-  --fasta                     STR       FASTA assembly file for read mapping
+--fasta                       STR       FASTA assembly file for read mapping
 
-  --gff                       STR       GFF file with gene information
+--gff                         STR       GFF file with gene information
 
-  --out                       STR       Output directory
+--out                         STR       Output directory
 
 Optional:
+
+--gff_config                  STR       <TXT config file with options to define the GFF attribute fields>
+
+--protein_encoding            STR       <yes or no to consider only protein encoding genes for TSS analysis> default is no
+
+--sample_support              STR       <yes or no for sample support based TSS scoring> default is no
+
+--coverage_difference         STR       <Percentage difference threshold between aligned and spanning read coverage> default is 10%
+
+--coverage_walk_origin        STR       <cds or utr> DEFAULT is cds
 
   --run_mode                  STR       Mode option for running the script [find_tss]
 
