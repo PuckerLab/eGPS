@@ -2,7 +2,7 @@
 ### Shakunthala Natarajan ###
 ### pucker@uni-bonn.de ###
 ### s64snata@uni-bonn.de ###
-__version__ = "v0.1.0"
+__version__ = "v0.1.1"
 
 __reference__ = "https://github.com/bpucker/eGPS"
 
