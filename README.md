@@ -39,7 +39,7 @@ git clone https://github.com/bpucker/eGPS
 This method of installation installs all the dependencies in a conda environment using the environment.yml file in this repository
 
 ```
-git clone [https://github.com/bpucker/eGPS](https://github.com/PuckerLab/eGPS)
+git clone https://github.com/PuckerLab/eGPS
 
 cd eGPS
 
