@@ -2,7 +2,7 @@
 ### Shakunthala Natarajan ###
 ### pucker@uni-bonn.de ###
 ### s64snata@uni-bonn.de ###
-__version__ = "v0.1.1"
+__version__ = "v0.2"
 
 __reference__ = "https://github.com/bpucker/eGPS"
 
@@ -221,7 +221,7 @@ def load_coverage( cov_file):
 
 def load_gene_infos( protein_encoding, gff_file, child_attribute, child_parent_linker, parent_attribute):
 	"""! @brief load gene ID, position, and orientation from GFF3 file """
-	
+
 	gene_infos = {}
 	mrna_infos = {}
 	five_utr_infos={}
@@ -490,7 +490,9 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 	intergenic_window_coverages = []
 	individual_pos_coverage = []
 	nonzero_positions = []
-
+	intergenic_region_lengths = []
+	n_overlapping = 0
+	adjacent_window_ratios = []
 	for contig in genes_per_chromosome:
 		coverage_lookup = dict(coverage_dic[contig])
 		gene_list = genes_per_chromosome[contig]
@@ -500,12 +502,17 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 			next_gene = gene_list[i + 1]
 			intergenic_start = gene_infos[gene]['end']
 			intergenic_end = gene_infos[next_gene]['start']
+			intergenic_length = intergenic_end - intergenic_start + 1
+			if intergenic_length <= 0:
+				continue#skip if the intergenic region belongs to the overlapping gene region
+			intergenic_region_lengths.append(intergenic_length)
 			full_intergenic_coverage_slice = [(pos, coverage_lookup[pos]) for pos in range(intergenic_start, intergenic_end + 1) if pos in coverage_lookup]
 			if len(full_intergenic_coverage_slice) > intergenic_buffer and len(full_intergenic_coverage_slice) > intergenic_region_size:
 				sliced_intergenic_coverage = full_intergenic_coverage_slice[intergenic_buffer:(len(full_intergenic_coverage_slice)-intergenic_buffer)]#leave a buffer near the gene regions for both the genes
 				chops = int(len(sliced_intergenic_coverage)/intergenic_region_size)#chop the intergenic region into bits of the same size so that a window of similar size can be compared in the sliding window strategy
 				# Trim to only the evenly divisible portion before chunking to avoid inclusion of partial final chunks
 				trimmed = sliced_intergenic_coverage[:chops * intergenic_region_size]
+				prev_chop_avg = 0
 				chop_start = 0
 				while chops > 0:
 					chop_region = trimmed[chop_start:chop_start+intergenic_region_size]
@@ -515,10 +522,52 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 						if cov >0:
 							nonzero_positions.append(pos)
 					avg_intergenic_window_coverage = cumulative_coverage / len(chop_region)
+					if chop_start > 0 and prev_chop_avg > 0 and avg_intergenic_window_coverage > 0:
+						hi = max(prev_chop_avg, avg_intergenic_window_coverage)
+						lo = min(prev_chop_avg, avg_intergenic_window_coverage)
+						adjacent_window_ratios.append(hi / lo)
+					prev_chop_avg = avg_intergenic_window_coverage
 					if avg_intergenic_window_coverage != 0.0:#adding only non-zero average coverage values to the background noise
 						intergenic_window_coverages.append(avg_intergenic_window_coverage)
 					chop_start += intergenic_region_size
 					chops -= 1
+
+	if adjacent_window_ratios:
+		ratio_arr = np.array(adjacent_window_ratios)
+		print(f'Adjacent-window ratio distribution in flat intergenic sequence '
+			  f'(n={ratio_arr.size}, window={intergenic_region_size} bp):')
+		for p in (50, 75, 90, 95, 99):
+			print(f'  {p:>3}th percentile: {np.percentile(ratio_arr, p):.3f}')
+		k = float(np.percentile(ratio_arr, 95))
+		print(f'  -> k (95th percentile) = {k:.3f}')
+	else:
+		k = 1.5
+		print(f'  no ratio pairs collected; falling back to k = {k}')
+
+	print(f'n_overlapping is {n_overlapping}')
+	#compute mean intergenic region length
+	intergenic_length_array = np.array(intergenic_region_lengths)
+	mean_intergenic_region_length = np.mean(intergenic_length_array)
+	print(f'Mean intergenic region length is {mean_intergenic_region_length} bp')
+
+	#debug code block
+	# --- distribution of intergenic lengths, and how many survive the buffer ---
+	print(f'Intergenic region length distribution (n={intergenic_length_array.size}):')
+	for p in (5, 10, 25, 50, 75, 90, 95, 99):
+		print(f'  {p:>3}th percentile: {np.percentile(intergenic_length_array, p):8.0f} bp')
+	print(f'  min {intergenic_length_array.min():.0f}, max {intergenic_length_array.max():.0f}')
+
+	# a region must survive trimming AND still hold at least one full window
+	needed = 2 * intergenic_buffer + intergenic_region_size
+	n_usable = int((intergenic_length_array >= needed).sum())
+	print(f'  buffer={intergenic_buffer}, window={intergenic_region_size} '
+		  f'-> need >= {needed} bp')
+	print(f'  usable regions: {n_usable} / {intergenic_length_array.size} '
+		  f'({100 * n_usable / intergenic_length_array.size:.1f}%)')
+	print(f'  -> sampling the top {100 - 100 * n_usable / intergenic_length_array.size:.1f}% '
+		  f'is excluded; background comes from the longest '
+		  f'{100 * n_usable / intergenic_length_array.size:.1f}% of intergenic regions')
+
 	# compute distances between consecutive nonzero positions
 	gaps = [nonzero_positions[i + 1] - nonzero_positions[i]
 			for i in range(len(nonzero_positions) - 1)]
@@ -539,6 +588,11 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 	print(f"Percentage of intergenic positions with zero coverage is {percent_zero}")
 	print(f"Percentage of intergenic positions with nonzero coverage is {percent_nonzero}")
 	cov_arr = np.array(intergenic_window_coverages)
+	if cov_arr.size == 0:
+		print(f'Warning: no intergenic window with non-zero coverage found. Could be a clean background. But still warning for caution!')
+		cov_arr = np.array([0.0])
+		intergenic_window_coverages_wo_outliers = cov_arr
+		return intergenic_window_coverages_wo_outliers, 1, 100, 0
 	q1, q3 = np.percentile(cov_arr, [25, 75])
 	iqr = q3 - q1
 	print(f"IQR effect analysis with intergenic buffer of {intergenic_buffer}")
@@ -549,6 +603,10 @@ def get_intergenic_background_seqs (outdir, coverage_dic, intergenic_buffer, int
 	print(f"Retention rate:                  {100 * len(intergenic_window_coverages_wo_outliers) / len(intergenic_window_coverages):.1f}%")
 	intergenic_array = np.array(intergenic_window_coverages_wo_outliers)
 	percentile_99 = np.percentile(intergenic_array, 99)
+
+	#computing k for hardcutoff repositioning in tss analysis
+	k = q3/ q1 if q1 > 0 else 1.5
+	print(f'window ratio spread in flat sequence: k= {k:.3f}')
 
 	#plotting the distribution of intergenic window coverages with outliers
 	plt.figure(figsize=(8,5))
@@ -762,14 +820,103 @@ def do_ks_test(normalized_cumulative_sum_array):
 	if slope == 0:
 		pval_ks = 1
 		diagonal_line_array = np.array([])
+		line_dist_array = np.array([])
 	else:
 		diagonal_line_array = np.linspace(0, normalized_cumulative_sum_array.max(), normalized_cumulative_sum_array.size)#the uniform diagonal baseline with the ideal slope
+		n = normalized_cumulative_sum_array.size
+		x0 = np.arange(n)
+		y0 = normalized_cumulative_sum_array
+		line_dist_array = (x0 - (n-1)*y0) /math.sqrt(1+(n-1)**2)#array of distance between points in the coverage trend to the diagonal line
 		stat_ks, pval_ks = stats.ks_2samp(normalized_cumulative_sum_array, diagonal_line_array)
-	return pval_ks, diagonal_line_array
+	return pval_ks, diagonal_line_array, line_dist_array
 
 #function to compute accelerated tss
-def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead, coverage_slice_list_for_accelerated_tss,strand):
-	accelerated_tss = None
+def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead, coverage_slice_list_for_accelerated_tss,strand,ttest_pval_threshold,foldchange_threshold ):
+	positions = np.array([pos for pos, cov in coverage_slice_list_for_accelerated_tss])#array of genomic positions
+	values = np.asarray(coverage_slice_list_for_accelerated_tss_arr,dtype=float)#array of coverage values at the genomic positions
+	#code block to incorporate strandedness
+	#always order the array in the direction of transcription
+	if positions.size < 2:#accelerated tss finding not possible with just 1 genomic position
+		print('FAIL: fewer than 2 positions')
+		return None
+	if strand =='-' and positions.size > 1 and positions[0] < positions[-1]:
+		positions = positions[::-1]#invert for - strand
+		values = values[::-1]
+	print(f'\n=== {gene} ===')
+	print(f'slice: {positions.size} positions, {positions.min()}-{positions.max()}')
+	print(f'coverage: min={values.min():.0f} max={values.max():.0f} '
+		  f'nonzero={(values > 0).sum()} ({100 * (values > 0).mean():.0f}%)')
+
+
+	#split where genomic positions are not consecutive (for example due to introns in the 5'UTR region
+	step = -1 if strand == '-' else 1
+	break_after = np.nonzero(np.diff(positions) != step )[0]#finds the indices of positions at which positional difference is not 1 meaning they are non-adjacent, and possibly interrupted by introns
+	block_starts = np.concatenate(([0], break_after + 1))#indices of contiguous block starts
+	block_ends = np.concatenate((break_after + 1,[positions.size]))#indices of contiguous block ends
+	print(f'blocks: {len(block_starts)}  (lookahead={lookahead}, '
+		  f'need >= {2 * lookahead} positions per block)')
+	candidates = []
+	for b, (s,e) in enumerate(zip(block_starts, block_ends)):#list of start, stop block pairs (tuples) to find accelerated tss in each block
+		block_pos = positions[s:e]
+		block_vals = values[s:e]
+		print(f'  block {b}: {block_pos[0]}-{block_pos[-1]}  n={block_pos.size}  '
+			  f'cov {block_vals.min():.0f}-{block_vals.max():.0f}  '
+			  f'mean={block_vals.mean():.1f}')
+		if block_pos.size < 2*lookahead:#block size should be greater than twice of the look ahead value since only then coverage change before and after the lookahead can be evaluated
+			print(f'    SKIP: too short ({block_pos.size} < {2 * lookahead})')
+			continue
+		consecutive_cov_differences = np.insert(np.ediff1d(block_vals),0,0)#insert 0 in the first position to make it parallel to block_pos
+		cumulative_sum_of_cov_diff = np.cumsum(np.abs(consecutive_cov_differences))#cumulative sum of absolute coverage differences
+		print(f'    total abs change = {cumulative_sum_of_cov_diff.max():.0f}')
+		if cumulative_sum_of_cov_diff.max() == 0:
+			print('    SKIP: coverage perfectly flat')
+			continue
+		crs = cumulative_sum_of_cov_diff/cumulative_sum_of_cov_diff.max()#normalized cumulative read sum array
+		pval_ks, diagonal_line_array, line_dist_array = do_ks_test(crs)#ks test to determine if the coverage values in the specified block deviate from uniform distribution; just acts like a pre-check to tell if accelerated tss can be found or not
+		print(f'    KS p = {pval_ks:.3g} (threshold {ks_pval_threshold})')
+		if pval_ks >= ks_pval_threshold or line_dist_array.size ==0:
+			print('    SKIP: KS gate')
+			continue
+		candidate_index = int(np.argmax(line_dist_array))#index of the point with max distance from diagonal line
+		print(f'    argmax at index {candidate_index} -> position {block_pos[candidate_index]}'
+			  f'  (line_dist max={line_dist_array.max():.4f}, min={line_dist_array.min():.4f})')
+		#w = min(lookahead, candidate_index, block_pos.size - candidate_index)
+		w = min(max(lookahead, int(0.1*block_pos.size)), candidate_index, block_pos.size - candidate_index)#redefining comparison window to account for candidate block length and in turn its ramp increase pattern to find accelerated tss in a better way; maybe try to provide0.1 i.e. 10% of the block to be a user-tunable parameter later?
+		print(f'    comparison window w = {w}')
+		if w < 2:
+			print('    SKIP: candidate too close to block edge')
+			continue
+		cov_before = block_vals[candidate_index - w:candidate_index]
+		cov_after = block_vals[candidate_index: candidate_index + w]
+		print(f'    before: mean={cov_before.mean():.1f} std={cov_before.std():.1f}')
+		print(f'    after : mean={cov_after.mean():.1f} std={cov_after.std():.1f}')
+		if np.std(cov_before) == 0 and np.std(cov_after) == 0:
+			print('    SKIP: both sides have zero variance')
+			continue
+		t_stat, t_pval = stats.ttest_ind(cov_before, cov_after, equal_var=False)#Welch t test to see if the mean coverage before and after the candidate point differ significantly and it is not noise
+		print(f'    t-test p = {t_pval:.3g} (threshold {ttest_pval_threshold})')
+		if not np.isfinite(t_pval) or t_pval >= ttest_pval_threshold:#code to check for NaN value as well as ttest pval being significant or not
+			print('    SKIP: t-test')
+			continue
+		mean_before = float(np.mean(cov_before))
+		mean_after = float(np.mean(cov_after))
+		log2fc = math.log((mean_after+1)/(mean_before+1),2)
+		print(f'    log2FC = {log2fc:.3f} (need >= {math.log(foldchange_threshold, 2):.3f})')
+		if not np.isfinite(log2fc) or log2fc < math.log(foldchange_threshold,2):#code to check for NaN value as well as fold change needed by atleast default (50%, threshold 1.5) for the point to be taken as true accelerated tss point
+			print('    SKIP: fold change too small or negative')
+			continue
+		print(f'    PASS -> candidate at {block_pos[candidate_index]}')
+		candidates.append((log2fc, int(block_pos[candidate_index]), t_pval))
+	if not candidates:
+		print(f'No accelerated TSS found for {gene}.')
+		return None
+	best_fold_change, best_pos, best_p = max(candidates, key=lambda c:c[0])
+	if len(candidates) > 1:
+		print(f'{gene}: {len(candidates)} candidate rise points; strongest at {best_pos}')
+	return best_pos#accelerated tss is now defined as the point where coverage starts to increase rapidly when compared to average rate of change of coverage in the defined block(s); it is confirmed for being significant change with t-test and fold change of at least 1.5 in log units and 50% in %
+
+
+"""
 	if len(coverage_slice_list_for_accelerated_tss) == 0:
 		accelerated_tss = None
 	else:
@@ -806,13 +953,14 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 					positions = np.array([pos for pos, cov in coverage_slice_list_for_accelerated_tss])
 					accelerated_tss = positions[index_steepest_rise_point]#the genomic position corresponding to the point of steepest increase
 	return accelerated_tss
+"""
 
 def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, output_folder, pvalue,
 					 intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene,
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos,percentdiff_threshold):
+					 gene_atg_dic, cds_infos,percentdiff_threshold,ttest_pval_threshold,foldchange_threshold):
 	"""! @brief run analysis on forward strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -823,6 +971,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 	intron_boundary_marker = {}#dictionary to collect intron boundary positions where key is donor splice site and value is acceptor splice site
 	most_upstream_pos = start
 	final_pos_status = False
+	pending_acceptor = None
 	while not final_pos_status:
 		# --- walk coverage upstream of transcription start while there is coverage --- #
 		while cov_per_contig[most_upstream_pos - 2] >= mincov:  # index = genomic position -1 but coverage of gene that is next to the current position needs to be assessed before moving in there
@@ -893,7 +1042,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 				if low_coverage_regime == False:
 					most_upstream_pos -= 1  # move one step upstream
 				else:
-					pass
+					pending_acceptor = intron_acceptor_splice_site_position # to facilitate correct carry over of marked acceptor from high to low coverage regime
 			if most_upstream_pos == hard_cutoff:  # stop if end of upstream contig/pseudochromosome is reached
 				hard_cutoff_reached = 'True;'+str(hard_cutoff)
 				break
@@ -906,39 +1055,63 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		"""
 		current_position = most_upstream_pos - 1
 		if current_position > hard_cutoff:
+			# code block to handle noisy cases where spurious high cov regime like reads show up in low cov regime and vice versa
+			# this is being added to make the transition marking pending_acceptor from the high cov regime to the low cov one mark actual intron boundaries and not intermediate points
+			while True:
+				aligned_cov = cov_per_contig[current_position - 2] #-2 here becuase for this block, current_position is the running variable. I look for the coverage in the next position upstream (current_position - 1) beforing stepping on to it
+				spanning_cov = scov_per_contig[current_position -2]
+				if spanning_cov != 0:
+					divergence_percent_diff = (((spanning_cov - aligned_cov)) / spanning_cov) * 100
+				else:
+					divergence_percent_diff = percentdiff_threshold  # trick to equate the divergence to the threshold so that it fails the next condition check as spanning cov is 0
+				if aligned_cov >= mincov and divergence_percent_diff <= percentdiff_threshold:
+					break
+				current_position -= 1
+				if current_position == hard_cutoff:
+					print(f'current position is {current_position}')
+					hard_cutoff_reached = 'True;' + str(hard_cutoff)
+					break
+			acceptor_pos = pending_acceptor if pending_acceptor is not None else most_upstream_pos
+			"""
 			while cov_per_contig[ current_position - 2 ] < mincov:#check if upstream position has low coverage
 				current_position -= 1
 				if current_position == hard_cutoff:
 					hard_cutoff_reached = 'True;'+str(hard_cutoff)
 					break
-			avg_gap_coverage = sum( scov_per_contig[ current_position-1:most_upstream_pos-1 ] )/(most_upstream_pos-current_position)
+			acceptor_pos = pending_acceptor if pending_acceptor is not None else most_upstream_pos
+			"""
+			avg_gap_coverage = sum( scov_per_contig[ current_position-1:acceptor_pos-1 ] )/(acceptor_pos-current_position)
 			#average coverage in intron should be very low
 			if current_position > min_exon_size and avg_gap_coverage > mincov:
 			# --- check coverage gaps for (canonical) splice sites to continue across introns --- #
 				donor_splice_site = seq_per_contig[current_position - 1:current_position + 1].upper()  # this should be GT for it to be canonical splice site
-				acceptor_splice_site = seq_per_contig[most_upstream_pos - 2:most_upstream_pos].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
+				acceptor_splice_site = seq_per_contig[acceptor_pos - 2:acceptor_pos].upper()  # this should be AG for it to be canonical splice site; changed the slicing from -3 and -1 respectively to -2 and nothing as only then the intron acceptor boundaries are correctly considered inclusively
 				if splicesites == "off":  # ignore check for canonical splice sites #tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
-					if most_upstream_pos - current_position < tolerated_gap:
-						intron_boundary_marker[intron_donor_splice_site_position] = intron_acceptor_splice_site_position
+					if acceptor_pos - current_position < tolerated_gap:
+						intron_boundary_marker[current_position] = acceptor_pos
 						most_upstream_pos = current_position - 1
 					else:#if splice sites off and tolerated gap check fails, make final pos status true; making the check stringent for the loop with cov less than mincov
 						final_pos_status = True
+						most_upstream_pos = acceptor_pos
 				elif donor_splice_site == "GT" and acceptor_splice_site == "AG":
-					print(f"Canonical donor splice site starting at {current_position}: " + donor_splice_site + '\n')
-					print(f"Canonical acceptor splice site ending at {most_upstream_pos}: " + acceptor_splice_site + '\n')
-					intron_boundary_marker[current_position] = most_upstream_pos
+					print(f"Low coverage regime: Canonical donor splice site starting at {current_position}: " + donor_splice_site + '\n')
+					print(f"Low coverage regime: Canonical acceptor splice site ending at {acceptor_pos}: " + acceptor_splice_site + '\n')
+					intron_boundary_marker[current_position] = acceptor_pos
 					most_upstream_pos = current_position - 1
 				elif donor_splice_site != "GT" or acceptor_splice_site != "AG":#tolerate gap check is activated only when non-canonical sites appear or when splicesites is off
-					print(f"Warning! Either one or both the donor and acceptor splice sites are non-canonical."+ '\n')
-					print(f"Donor splice site starting at {current_position}: " + donor_splice_site+ '\n')
-					print(f"Acceptor splice site ending at {most_upstream_pos}: " + acceptor_splice_site+ '\n')
-					if most_upstream_pos - current_position < tolerated_gap:
-						intron_boundary_marker[current_position] = most_upstream_pos
+					print(f"Low coverage regime: Warning! Either one or both the donor and acceptor splice sites are non-canonical."+ '\n')
+					print(f"Low coverage regime: Donor splice site starting at {current_position}: " + donor_splice_site+ '\n')
+					print(f"Low coverage regime: Acceptor splice site ending at {acceptor_pos}: " + acceptor_splice_site+ '\n')
+					if acceptor_pos - current_position < tolerated_gap:
+						intron_boundary_marker[current_position] = acceptor_pos
 						most_upstream_pos = current_position - 1
 					else:#if non canonical splice sites show up and tolerated gap check fails, make final pos status true; making the check stringent for the loop with cov less than mincov
 						final_pos_status = True
+						most_upstream_pos = acceptor_pos
 			else:
 				final_pos_status = True
+				most_upstream_pos = acceptor_pos
+			pending_acceptor = None
 		else:
 			final_pos_status = True
 
@@ -997,13 +1170,50 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		valid = np.diff(np.array(count_prefix[lo:hi + 1])).astype(bool)
 		filtered_positions = positions[valid]
 		filtered_covs = values[valid]
+		print(f'slice called: lo_pos={lo_pos} hi_pos={hi_pos} '
+			  f'(lo={lo} hi={hi}) -> arange gave {positions.size}, '
+			  f'{len(filtered_positions)} after filtering')
 		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
+	#the repositioning strategy did not work out so commenting it
+	"""
+	#repositioning code in case hard_cutoff is reached
+	if walk_tss <= hard_cutoff:
+		sign_run_length = 2 * intergenic_region_size
+		scan_pos = start
+		prev_avg = window_avg(scan_pos)
+		signs = []
+		scan_positions = []
+		while scan_pos > walk_tss:
+			scan_pos -= slide_step
+			this_avg = window_avg(scan_pos)
+			if this_avg is None or prev_avg is None:
+				this_avg = prev_avg
+				continue
+			diff = this_avg - prev_avg
+			signs.append(1 if diff > 0 else (-1 if diff < 0 else 0))
+			scan_positions.append(scan_pos)
+			prev_avg = this_avg
+			#stop at the first window of sign_run_length where the decline in coverage has ended
+			if len(signs) >=sign_run_length:
+				window = signs[-sign_run_length:]#reverses to give a sliding view of the last 20 signs i.e. the most recent stretch
+				if window.count(-1) < sign_run_length//2:
+					repositioned = scan_positions[-sign_run_length]
+					print(f'{gene}: walk TSS at hard cutoff {walk_tss}; '
+						  f'decline ends at {repositioned}, repositioning')
+					walk_tss = repositioned
+					most_upstream_pos = repositioned
+					break
+		else:#while else loop's else fires only if the break did not fire in the while block above
+			print(f'{gene}: walk TSS at hard cutoff {walk_tss}; '
+				  f'no end of decline found, not repositioned')
+	"""
 
 	# window sliding strategy to compare against background intergenic noise
 	window_pass = 0
 	basal_tss = None
 	elevated_tss = None
 	accelerated_tss = None
+	accelerated_basal_tss = None
 
 	window_starts = []
 	window_starts.append(most_upstream_pos)
@@ -1023,10 +1233,12 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 				print("No window sliding happened. TSS based on coverage walk only.")
 				elevated_tss = most_upstream_pos
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(elevated_tss, start)
-				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold,foldchange_threshold)
 				tsr = 'NA'
 				break
 			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(walk_tss, start)
+				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold, foldchange_threshold)
 				first_most_upstream_pos = most_upstream_pos
 				window_pass_signal_strength = 0
 				window_pass_check = 0
@@ -1045,7 +1257,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 					window_pass_check += 1
 				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
 					coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(first_most_upstream_pos, start)
-					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+')
+					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold,foldchange_threshold)
 					if slide_step == 1:
 						elevated_tss = first_most_upstream_pos
 						tsr = 'NA'
@@ -1063,6 +1275,8 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 					if most_upstream_pos > start:
 						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
 						basal_tss = walk_tss
+						coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(basal_tss, start)
+						accelerated_basal_tss = get_accelerated_tss(ks_pval, gene,coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold, foldchange_threshold)
 						tsr = 'NA'
 						break
 
@@ -1075,8 +1289,19 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 			if most_upstream_pos > start:
 				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
 				basal_tss = walk_tss
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(basal_tss, start)
+				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold, foldchange_threshold)
 				tsr = 'NA'
 				break
+	if accelerated_tss is not None and accelerated_basal_tss is not None:
+		if abs(accelerated_tss-accelerated_basal_tss) <= intergenic_region_size:
+			print(f'Multiple acceleration points of transcription are in close proximity. Potentially focussed promoter driven transcription initiation.')
+		else:
+			print(f'Multiple acceleration points of transcription are distant relative to the proximity tolerance allowed. Potentially diffuse promoter driven transcription initiation with multiple transcription start sites')
+	if accelerated_tss is None and accelerated_basal_tss is not None:
+		accelerated_tss = accelerated_basal_tss
+	if accelerated_tss is None and accelerated_basal_tss is None:
+		accelerated_tss =None
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1206,7 +1431,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 	else:
 		other_tool_tss_yr_compliant = 'NA'
 
-	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant, hard_cutoff_reached
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant
 
 
 def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, pvalue,
@@ -1214,7 +1439,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos, percentdiff_threshold):
+					 gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold):
 	"""! @brief run analysis on reverse strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -1225,6 +1450,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 	intron_boundary_marker = {}
 	most_downstream_pos = end
 	final_pos_status = False
+	pending_acceptor = None
 	while not final_pos_status:
 		# --- walk coverage upstream of transcription start while there is coverage --- #
 		while cov_per_contig[most_downstream_pos] >= mincov:  # index = next genomic position but the coverage of the next successive position needs to be looked at and not the current position
@@ -1289,7 +1515,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 				if low_coverage_regime == False:
 					most_downstream_pos += 1
 				else:
-					pass
+					pending_acceptor = intron_acceptor_splice_site_position #to carry over correct acceptor spliced marked from high cov region over to low coverage regime
 			if most_downstream_pos == hard_cutoff:  # stop if end of contig/pseudochromosome is reached
 				hard_cutoff_reached = 'True;'+str(hard_cutoff)
 				break
@@ -1297,38 +1523,62 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		# --- try to cross intron --- #
 		current_position = most_downstream_pos + 1  # most_downstream_pos has coverage above cutoff (position, not index!)
 		if current_position < hard_cutoff:
+			#code block to handle noisy cases where spurious high cov regime like reads show up in low cov regime and vice versa
+			#this is being added to make the transition marking pending_acceptor from the high cov regime to the low cov one mark actual intron boundaries and not intermediate points
+			while True:
+				aligned_cov = cov_per_contig[current_position]
+				spanning_cov = scov_per_contig[current_position]
+				if spanning_cov != 0:
+					divergence_percent_diff = (((spanning_cov - aligned_cov))/spanning_cov) * 100
+				else:
+					divergence_percent_diff = percentdiff_threshold#trick to equate the divergence to the threshold so that it fails the next condition check as spanning cov is 0
+				if aligned_cov >= mincov and divergence_percent_diff <= percentdiff_threshold:
+					break
+				current_position += 1
+				if current_position == hard_cutoff:
+					print(f'current position is {current_position}')
+					hard_cutoff_reached = 'True;'+str(hard_cutoff)
+					break
+			acceptor_pos = pending_acceptor if pending_acceptor is not None else most_downstream_pos
+			"""
 			while cov_per_contig[current_position] < mincov:  # check if downstream position has low coverage
 				current_position += 1  # move one step downstream
 				if current_position == hard_cutoff:
 					print(f'current position is {current_position}')
 					hard_cutoff_reached = 'True;'+str(hard_cutoff)
 					break
-			avg_gap_coverage = sum( scov_per_contig[ most_downstream_pos-1 : current_position-1 ] )/(current_position - most_downstream_pos)
+			acceptor_pos = pending_acceptor if pending_acceptor is not None else most_downstream_pos
+			"""
+			avg_gap_coverage = sum( scov_per_contig[ acceptor_pos-1 : current_position-1 ] )/(current_position - acceptor_pos)
 			if current_position < (len(seq_per_contig) - min_exon_size) and avg_gap_coverage > mincov:
 				donor_splice_site = seq_per_contig[current_position - 2:current_position].upper()
-				acceptor_splice_site = seq_per_contig[most_downstream_pos - 1:most_downstream_pos + 1].upper()
+				acceptor_splice_site = seq_per_contig[acceptor_pos - 1:acceptor_pos + 1].upper()
 				if splicesites == "off":
-					if current_position - most_downstream_pos < tolerated_gap:
-						intron_boundary_marker[most_downstream_pos] = current_position #the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+					if current_position - acceptor_pos < tolerated_gap:
+						intron_boundary_marker[acceptor_pos] = current_position #the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
 						most_downstream_pos = current_position + 1
 					else:
 						final_pos_status = True
+						most_downstream_pos = acceptor_pos
 				elif donor_splice_site == 'AC' and acceptor_splice_site == "CT":
 					print(f"Low coverage regime: Canonical donor splice site starting at {current_position}: " + donor_splice_site + '\n')
-					print(f"Low coverage regime: Canonical acceptor splice site ending at {most_downstream_pos}: " + acceptor_splice_site + '\n')
-					intron_boundary_marker[most_downstream_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+					print(f"Low coverage regime: Canonical acceptor splice site ending at {acceptor_pos}: " + acceptor_splice_site + '\n')
+					intron_boundary_marker[acceptor_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
 					most_downstream_pos = current_position + 1
 				elif donor_splice_site != 'AC' or acceptor_splice_site != "CT":
 					print(f"Low coverage regime: Warning! Either one or both the donor and acceptor splice sites are non-canonical." + '\n')
 					print(f"Low coverage regime: Donor splice site starting at {current_position}: " + donor_splice_site + '\n')
-					print(f"Low coverage regime: Acceptor splice site ending at {most_downstream_pos}: " + acceptor_splice_site + '\n')
-					if current_position - most_downstream_pos < tolerated_gap:
-						intron_boundary_marker[most_downstream_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
-						most_downstream_pos += 1
+					print(f"Low coverage regime: Acceptor splice site ending at {acceptor_pos}: " + acceptor_splice_site + '\n')
+					if current_position - acceptor_pos < tolerated_gap:
+						intron_boundary_marker[acceptor_pos] = current_position  # the key is acceptor site and value is donor site since donor is in high coords in rev strand and acceptor is in low coords in rev strand
+						most_downstream_pos = current_position + 1
 					else:
 						final_pos_status = True
+						most_downstream_pos = acceptor_pos
 			else:
 				final_pos_status = True
+				most_downstream_pos = acceptor_pos
+			pending_acceptor = None
 		else:
 			final_pos_status = True
 
@@ -1385,6 +1635,9 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		valid = np.diff(np.array(count_prefix[idx_start:idx_end + 2])).astype(bool)
 		filtered_positions = positions[valid]
 		filtered_covs = values[valid]
+		print(f'slice called: lo_pos={lo_pos} hi_pos={hi_pos} '
+			  f'(lo={idx_start} hi={idx_end}) -> arange gave {positions.size}, '
+			  f'{len(filtered_positions)} after filtering')
 		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
 
 
@@ -1393,7 +1646,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 	basal_tss = None
 	elevated_tss = None
 	accelerated_tss = None
-	secondary_accelerated_tss = None
+	accelerated_basal_tss = None
 
 	window_starts = []
 	window_starts.append(most_downstream_pos)
@@ -1413,10 +1666,12 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 				print("No window sliding happened. TSS based on coverage walk only.")
 				elevated_tss = most_downstream_pos
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, elevated_tss)
-				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold,foldchange_threshold)
 				tsr = 'NA'
 				break
 			elif window_pass != 0:  # the window of the walk-based TSS is in the intergenic background noise region
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, walk_tss)
+				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold, foldchange_threshold)
 				first_most_downstream_pos = most_downstream_pos
 				window_pass_signal_strength = 0
 				window_pass_check = 0
@@ -1435,7 +1690,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					window_pass_check += 1
 				if window_pass_signal_strength == strength:  # if a window with higher signal then the noise is found, check if the 3 (default; can be changed) consecutive windows next to it are also signal to determine confidently that elevated TSS
 					coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, first_most_downstream_pos)
-					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-')
+					accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold,foldchange_threshold)
 					if slide_step == 1:
 						elevated_tss = first_most_downstream_pos
 						tsr = 'NA'
@@ -1452,6 +1707,8 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					if most_downstream_pos < end:
 						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
 						basal_tss = walk_tss
+						coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, basal_tss)
+						accelerated_basal_tss = get_accelerated_tss(ks_pval, gene,coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold, foldchange_threshold)
 						tsr = 'NA'
 						break
 		else:
@@ -1463,9 +1720,20 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 			if most_downstream_pos < end:
 				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
 				basal_tss = walk_tss
+				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, basal_tss)
+				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold, foldchange_threshold)
 				tsr = 'NA'
 				break
 
+	if accelerated_tss is not None and accelerated_basal_tss is not None:
+		if abs(accelerated_tss-accelerated_basal_tss) <= intergenic_region_size:
+			print(f'Multiple acceleration points of transcription are in close proximity. Potentially focussed promoter driven transcription initiation.')
+		else:
+			print(f'Multiple acceleration points of transcription are distant relative to the proximity tolerance allowed. Potentially diffuse promoter driven transcription initiation with multiple transcription start sites')
+	if accelerated_tss is None and accelerated_basal_tss is not None:
+		accelerated_tss = accelerated_basal_tss
+	if accelerated_tss is None and accelerated_basal_tss is None:
+		accelerated_tss =None
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1600,12 +1868,12 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 	else:
 		other_tss_yr_compliant = 'NA'
 
-	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant, hard_cutoff_reached
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant
 
 
 def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 	"""! @brief find upstream and downstream genes """
-	
+
 	just_up_gene = False
 	just_down_gene = False
 	chromosome = gene_infos[ gene ]['chromosome']
@@ -1638,7 +1906,7 @@ def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
 			down_genes.append(down_gene)
 			counter+=1
 	return just_up_gene, just_down_gene, up_genes, down_genes
-	
+
 
 def extract_promoter_region( upstream_slice, downstream_slice, gene, start, end, result, tss, orientation, hard_cutoff, seq_per_contig, min_promoter_size, max_promoter_size, downstream_size ):
 	"""! @brief extract promoter region """
@@ -1879,16 +2147,109 @@ def promoter_motif_analysis (numcols, upstream_slice, downstream_slice, bg_score
 			os.remove(tmp.name)
 	return cumulative_promoter_motif_score, percentile_of_promoter_score, canonical_hits
 
+#function to compute threshold of spanning to aligned coverage ratios at intronic positions inside the gene
+def compute_intron_ratio_threshold(gff_file, child_parent_linker,coverage, scoverage,percentile, edge_trim, min_total_positions,default_ratio):
+	trans_exon_map = {}
+	unique_introns = {}
+	intron_sizes = []
+	n_zero_aligned = 0
+	min_intron_length = ((2 * edge_trim) + 1)
+	with open(gff_file, 'r') as f:
+		for line in f:
+			if not line.startswith('#'):
+				parts = line.strip().split('\t')
+				if parts[2].lower() == 'exon':
+					fields = parts[8].strip().split(';')
+					for each in fields:
+						key, _, value = each.partition(
+							"=")  # splits at the first occurrence of the separator into exactly two parts where the second part does not have the separator; the _ is placeholder telling that the separator is not needed here so don't retrieve it; key is child_parent_linker, value is transcript names
+						if key.strip() != child_parent_linker:
+							continue
+						for transcript in value.split(','):
+							transcript = transcript.strip()
+							if not transcript:
+								continue
+							start = int(parts[3])
+							end = int(parts[4])
+							trans_exon_map.setdefault(transcript, []).append((start, end, parts[0]))
+						break  # to stop once parent descriptor field is found and prevent looping through other field descriptors like Name, and so on
+						"""
+						if f'{child_parent_linker}=' in each:
+							transcript = each.replace(f'{child_parent_linker}=', '')
+							start = int(parts[3])
+							end = int(parts[4])
+							if transcript not in trans_exon_map:
+								trans_exon_map[transcript] = [(start, end)]
+							else:
+								trans_exon_map[transcript].append((start, end))
+						"""
+	# calculate intron sizes
+	for transcript in trans_exon_map.keys():
+		exons = trans_exon_map[transcript]
+		if len(exons) < 2:
+			continue
+		counter = 0
+		# sort by ascending order of start coordinates
+		exons.sort(key=lambda x: x[0])
+		while counter <= (len(exons) - 2):
+			intron = exons[counter + 1][0] - exons[counter][1] - 1
+			if intron <= 0:
+				pass
+			else:
+				contig = exons[counter][2]
+				intron_start = exons[counter][1] + 1
+				intron_end = exons[counter + 1][0] - 1
+				unique_introns[(contig, intron_start, intron_end)] = intron
+			# intron_sizes.append(intron)
+			counter += 1
+
+	ratios = []
+	for (contig,intron_start,intron_end), intron_length in unique_introns.items():
+		if intron_length <= min_intron_length:
+			continue
+		if contig not in coverage or contig not in scoverage:
+			continue
+		cov_per_contig = coverage[contig]
+		scov_per_contig = scoverage[contig]
+		lo = (intron_start - 1) + edge_trim
+		hi = (intron_end - 1) - edge_trim
+
+		if hi>=len(cov_per_contig) or hi>=len(scov_per_contig):
+			continue
+		positions = range(lo,hi+1)
+
+		for idx in positions:
+			aligned = cov_per_contig[idx]
+			spanning = scov_per_contig[idx]
+			if aligned == 0:
+				n_zero_aligned +=1
+				continue
+			if spanning<=aligned:
+				continue
+			ratios.append(spanning/aligned)
+	if len(ratios) < min_total_positions:
+		print(f'Falling back to default ratio {default_ratio}x')
+		return float(default_ratio)
+
+	ratios.sort()
+	threshold = float(np.percentile(ratios, percentile))
+	print(f'No. of intronic positions with 0 aligned coverage is {n_zero_aligned}')
+	for p in (5, 10, 20, 25, 50, 75):
+		print(f'  {p:>3}th percentile ratio = {float(np.percentile(ratios, p)):.2f}')
+	print(f'  -> using {percentile}th percentile: ratio threshold = {threshold:.2f}')
+
+	return threshold
+
 
 def main( arguments ):
 	"""! @brief run everything """
-	
+
 	#input: GFF file with gene positions (translation start sites)
 	gff_file = arguments[ arguments.index('--gff')+1 ]
-	
+
 	#input FASTA with genome sequence (check splite sites)
 	fasta_file = arguments[ arguments.index('--fasta')+1 ]
-	
+
 	#gene of interest (string or file)
 	goi_input = arguments[ arguments.index('--goi')+1 ]
 	if not os.path.isfile( goi_input ):
@@ -1980,10 +2341,25 @@ def main( arguments ):
 	else:
 		t = 4
 
-	if '--intron_percentile_cutoff' in arguments:
+	if '--intron_percentile_cutoff' in arguments:#threshold to determine cutoff point for intron size for ALignIntronMax parameter for RNA-seq mapping
 		percentile_cut = int(arguments[arguments.index('--intron_percentile_cutoff') + 1])
 	else:
 		percentile_cut = 99
+
+	if '--intron_ratio_percentile_cutoff' in arguments:#threshold to determine cutoff point for spanning/aligned cov ratios in the intronic regions
+		intron_ratio_percentile = float(arguments[arguments.index('--intron_ratio_percentile_cutoff') + 1])
+	else:
+		intron_ratio_percentile = 25.0
+
+	if '--intron_pos' in arguments: #minimum number of intronic positions needed for automatic ratio threshold determintation
+		min_total_positions = int(arguments[arguments.index('--intron_pos')+1])
+	else:
+		min_total_positions = 1000
+
+	if'--intron_ratio' in arguments:
+		default_ratio = float(arguments[arguments.index('--intron_ratio')+1])
+	else:
+		default_ratio = 2.0
 
 	parallelize_cov_generation = False
 	if '--bam' in arguments:
@@ -2000,7 +2376,7 @@ def main( arguments ):
 			sorted_bam_folder = os.path.join(output_folder,'Sorted_BAM_files')
 			if not os.path.exists(sorted_bam_folder):
 				os.makedirs(sorted_bam_folder)
-		
+
 		if not bam_sorted_status:	#sorting the BAM file if it was not sorted already
 			print ("sorting BAM file(s) ...")
 			if parallelize_cov_generation:# to handle folder of BAM files sorting
@@ -2091,13 +2467,13 @@ def main( arguments ):
 		percentdiff_threshold = float(arguments[arguments.index("--coverage_difference")+1])
 	else:
 		percentdiff_threshold = 10
-	
+
 	#minimal exon size
 	if '--minexon' in arguments:
 		min_exon_size = int( arguments[ arguments.index('--minexon')+1 ] )
 	else:
 		min_exon_size = 10
-	
+
 	#flanking region for plot
 	if '--flanksize' in arguments:
 		flank_region_for_plot = int( arguments[ arguments.index('--flanksize')+1 ] )
@@ -2109,13 +2485,13 @@ def main( arguments ):
 		window = int( arguments[arguments.index('--neighbourhood')+1])
 	else:
 		window = 5
-	
+
 	#tolerated coverage gap size (due to sequence variant)
 	if '--gapsize' in arguments:
 		tolerated_gap = int( arguments[ arguments.index('--gapsize')+1 ] )
 	else:
 		tolerated_gap = 5
-	
+
 	if '--splicesites' in arguments:
 		splicesites = arguments[ arguments.index('--splicesites')+1 ]
 		if splicesites not in [ "strict", "off" ]:
@@ -2123,7 +2499,7 @@ def main( arguments ):
 			print( "WARNING: splice site handling set to strict due to unrecognized user input." )
 	else:
 		splicesites = "strict"
-	
+
 	if '--min_promoter_size' in arguments:
 		min_promoter_size = arguments[arguments.index('--min_promoter_size')+1]
 	else:
@@ -2211,11 +2587,23 @@ def main( arguments ):
 	else:
 		background_percentage = 0.05 #5% is default
 
-	#p-value for Kolmogorov Smirnov distribution fit test
+	#p-value threshold for Kolmogorov Smirnov distribution fit test
 	if '--ks_pval' in arguments:
 		ks_pval = float(arguments[arguments.index('--ks_pval')+1])
 	else:
 		ks_pval = 0.01
+
+	#p-value threshold for Welch t-test
+	if '--t_pval' in arguments:
+		ttest_pval_threshold = float(arguments[arguments.index('--t_pval')+1])
+	else:
+		ttest_pval_threshold = 0.01
+
+	#fold change threshold to identify candiate points for accelerated tss
+	if '--fold_change' in arguments:
+		foldchange_threshold = float(arguments[arguments.index('--fold_change')+1])
+	else:
+		foldchange_threshold = 1.5
 
 	#p-value threshold for MOODS analysis
 	if '--moods_pval' in arguments:
@@ -2244,11 +2632,11 @@ def main( arguments ):
 	else:
 		intergenic_region_size = 10
 
-	#flag to trim bases from intron ends to avoid splice junctions from showing up in intron coverage analysis
+	#flag to trim bases from intron ends to avoid splice junctions from showing up in intron spanning/aligned coverage ratio analysis
 	if '--intron_trim' in arguments:
-		trim = int(arguments[arguments.index('--intron_trim')+1])
+		edge_trim = int(arguments[arguments.index('--intron_trim')+1])
 	else:
-		trim = 5
+		edge_trim = 5
 
 	#flag to fix the size of window sliding steps for comparing against intergenic background
 	if '--slide' in arguments:
@@ -2262,7 +2650,7 @@ def main( arguments ):
 	else:
 		strength = 3
 
-	#flag to determine the number of bases or positions to be looked ahead for determining the minima point accompanying the steepest positive transition in coverage
+	#flag to determine the number of bases or positions to be looked ahead for determining the accelerated tss
 	if '--lookahead' in arguments:
 		lookahead = int(arguments[arguments.index('--lookahead')+1])
 	else:
@@ -2278,6 +2666,7 @@ def main( arguments ):
 	if run_mode == 'make_bam':
 		#Calculating the optimal intron size for the species to be analysed
 		trans_exon_map = {}
+		unique_introns = {}
 		intron_sizes = []
 
 		# parsing the gff file and making a dictionary where keys are transcript names and values are lists of tuples where each tuple is the start, end coordinate of exons in that transcript
@@ -2288,6 +2677,18 @@ def main( arguments ):
 					if parts[2].lower() == 'exon':
 						fields = parts[8].strip().split(';')
 						for each in fields:
+							key, _, value = each.partition("=")#splits at the first occurrence of the separator into exactly two parts where the second part does not have the separator; the _ is placeholder telling that the separator is not needed here so don't retrieve it; key is child_parent_linker, value is transcript names
+							if key.strip() != child_parent_linker:
+								continue
+							for transcript in value.split(','):
+								transcript = transcript.strip()
+								if not transcript:
+									continue
+								start = int(parts[3])
+								end = int(parts[4])
+								trans_exon_map.setdefault(transcript, []).append((start, end, parts[0]))
+							break#to stop once parent descriptor field is found and prevent looping through other field descriptors like Name, and so on
+							"""
 							if f'{child_parent_linker}=' in each:
 								transcript = each.replace(f'{child_parent_linker}=', '')
 								start = int(parts[3])
@@ -2296,7 +2697,7 @@ def main( arguments ):
 									trans_exon_map[transcript] = [(start, end)]
 								else:
 									trans_exon_map[transcript].append((start, end))
-
+							"""
 		# calculate intron sizes
 		for transcript in trans_exon_map.keys():
 			exons = trans_exon_map[transcript]
@@ -2310,9 +2711,13 @@ def main( arguments ):
 				if intron <= 0:
 					pass
 				else:
-					intron_sizes.append(intron)
+					contig=exons[counter][2]
+					intron_start = exons[counter][1] + 1
+					intron_end = exons[counter+1][0] - 1
+					unique_introns[(contig, intron_start, intron_end)] = intron
+					#intron_sizes.append(intron)
 				counter += 1
-
+		intron_sizes = list(unique_introns.values())
 		# Calculate statistics
 		median_size = np.median(intron_sizes)
 		mean_size = np.mean(intron_sizes)
@@ -2438,6 +2843,8 @@ def main( arguments ):
 
 	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, protein_coding_genes_per_chromosome = load_gene_infos( protein_encoding, gff_file, child_attribute, child_parent_linker, parent_attribute )
 	genome_seq, seq_counter = load_sequences( fasta_file )
+	intron_ratio_threshold = compute_intron_ratio_threshold(gff_file, child_parent_linker, coverage, scoverage, intron_ratio_percentile, edge_trim,min_total_positions, default_ratio)
+	print(f'Intron spanning/aligned ratio threshold inferred from the annotation is {intron_ratio_threshold}x')
 	t_intergenic_start = time.perf_counter()
 	print(f'Retrieving intergenic background seqs')
 	intergenic_window_coverages, z_ig, ig_percent_zero, ig_percent_nonzero = get_intergenic_background_seqs(output_folder, coverage_dic, intergenic_buffer, intergenic_region_size,genes_per_chromosome, gene_infos)
@@ -2530,13 +2937,21 @@ def main( arguments ):
 			if coverage_walk_origin == 'utr':
 				if gene not in five_utr_dic and orientation == '+':
 					five_utr_dic[gene] = f"No 5'UTR annotated. {gene} start used for TSS prediction."
+					start = gene_start
+					end = gene_end
 				if gene not in five_utr_dic and orientation == '-':
 					five_utr_dic[gene] = f"No 5'UTR annotated. {gene} end used for TSS prediction."
-			elif coverage_walk_origin == 'cds':
+					start = gene_start
+					end = gene_end
+			elif coverage_walk_origin == 'cds':#gene not in five_utr_dic is not the right check here, nevertheless it is harmless/ benign and may need a rewrite later
 				if gene not in five_utr_dic and orientation == '+':
 					five_utr_dic[gene] = f"No CDS annotated. {gene} start used for TSS prediction."
+					start = gene_start
+					end = gene_end
 				if gene not in five_utr_dic and orientation == '-':
 					five_utr_dic[gene] = f"No CDS annotated. {gene} end used for TSS prediction."
+					start = gene_start
+					end = gene_end
 			tflank_start = time.perf_counter()
 			if protein_encoding == "no":
 				upstream_gene, downstream_gene, upstream_gene_list, downstream_gene_list = find_flanking_genes( gene, gene_infos, genes_per_chromosome, window )
@@ -2591,13 +3006,13 @@ def main( arguments ):
 					hard_cutoff = 1
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant, hard_cutoff_reached = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff_reached]
+					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant,elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant, hard_cutoff_reached]
+					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant,elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant, hard_cutoff]
 				tss_list = {}
 				if basal_tss:
 					tss_list['basal'] = basal_tss
@@ -2655,13 +3070,13 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant, hard_cutoff_reached = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff_reached]
+					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant,other_tss_yr_compliant, hard_cutoff_reached]
+					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant,other_tss_yr_compliant, hard_cutoff]
 				tss_list = {}
 				if basal_tss:
 					tss_list['basal'] = basal_tss
@@ -2748,7 +3163,7 @@ def main( arguments ):
 			out.write("\t".join(
 				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
 				 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS",
-				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", "Hard cutoff reached"
+				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", "Hard cutoff",
 				 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",
 				 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",
 				 "Additional comments"]) + "\n")
@@ -2795,10 +3210,10 @@ def main( arguments ):
 		with open( final_output_file, "w" ) as out:
 			out.write("\t".join(
 				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
-				 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS", f"{other_tool} TSS"
-				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", f"{other_tool} TSS YR compliance","Hard cutoff reached"
-				 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",
-				 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",
+				 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS", f"{other_tool} TSS",
+				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", f"{other_tool} TSS YR compliance","Hard cutoff",
+				 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",f"{other_tool} promoter status",
+				 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",f"{other_tool} promoter sequence",
 				 "Additional comments"]) + "\n")
 			for gene in list(results.keys()):
 				final_results = []
