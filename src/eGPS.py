@@ -73,6 +73,7 @@ import tempfile
 import time
 import traceback
 import numpy as np
+from mpmath import floor
 from scipy import stats
 from scipy.stats import percentileofscore
 import seaborn as sns
@@ -83,6 +84,7 @@ from build_offsets import run_build_offsets_parallel
 from sum_chunk_seek import run_sum_chunk_seek_parallel
 from concatenate_chunks import concatenate_chunks
 from parallel_coverage_generation import parallelize_coverage_file_generation
+from boundary_convergence_module import run_boundary_convergence, summarize_boundaries, pick_dominant_tier, plot_boundary_convergence,list_sample_cov_files
 try:
 	import matplotlib.pyplot as plt
 	from matplotlib.lines import Line2D
@@ -642,11 +644,11 @@ def generate_plot( other_tool, other_tool_tss_pos, values, svalues, fig_file, at
 	ax2.plot([atg_pos, atg_pos], [0, max(svalues + values)], color="green", linestyle="dotted", label="ATG")  # ATG position
 	ax2.plot([cov_walk_start, cov_walk_start], [0, max(svalues + values)], color="orange", linestyle="dotted", label="Coverage walk origin")  # 5'UTR start or end or gene start or end position depending on strandedness and 5'UTR annotation being present for the gene's most upstream or downstream transcripts
 	if basal_tss_pos is not None:
-		ax2.plot([basal_tss_pos, basal_tss_pos], [0, max(svalues + values)], color="brown", linestyle="dotted", label="Basal TSS")  # basal TSS position
+		ax2.plot([basal_tss_pos, basal_tss_pos], [0, max(svalues + values)], color="brown", linestyle="dotted", label="Edge point")  # basal TSS position renamed as edge point
 	if elevated_tss_pos is not None:
-		ax2.plot([elevated_tss_pos, elevated_tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="Elevated TSS")  # elevated TSS position
+		ax2.plot([elevated_tss_pos, elevated_tss_pos], [0, max(svalues + values)], color="blue", linestyle="dotted", label="Elevation point")  # elevated TSS position renamed as elevation point
 	if accelerated_tss_pos is not None:
-		ax2.plot([accelerated_tss_pos, accelerated_tss_pos], [0, max(svalues + values)], color="pink", linestyle="dotted",label="Accelerated TSS")  # accelerated TSS position
+		ax2.plot([accelerated_tss_pos, accelerated_tss_pos], [0, max(svalues + values)], color="pink", linestyle="dotted",label="Acceleration point")  # accelerated TSS position renamed as acceleration point
 	if other_tool_tss_pos is not None:
 		ax2.plot([other_tool_tss_pos, other_tool_tss_pos], [0, max(svalues + values)], color="red", linestyle="dotted",label=f"{other_tool} TSS")  # other tool TSS position
 	handles, labels = ax2.get_legend_handles_labels()
@@ -837,15 +839,14 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 	#code block to incorporate strandedness
 	#always order the array in the direction of transcription
 	if positions.size < 2:#accelerated tss finding not possible with just 1 genomic position
-		print('FAIL: fewer than 2 positions')
+		#print('FAIL: fewer than 2 positions')
 		return None
 	if strand =='-' and positions.size > 1 and positions[0] < positions[-1]:
 		positions = positions[::-1]#invert for - strand
 		values = values[::-1]
-	print(f'\n=== {gene} ===')
-	print(f'slice: {positions.size} positions, {positions.min()}-{positions.max()}')
-	print(f'coverage: min={values.min():.0f} max={values.max():.0f} '
-		  f'nonzero={(values > 0).sum()} ({100 * (values > 0).mean():.0f}%)')
+	#print(f'\n=== {gene} ===')
+	#print(f'slice: {positions.size} positions, {positions.min()}-{positions.max()}')
+	#print(f'coverage: min={values.min():.0f} max={values.max():.0f} ' f'nonzero={(values > 0).sum()} ({100 * (values > 0).mean():.0f}%)')
 
 
 	#split where genomic positions are not consecutive (for example due to introns in the 5'UTR region
@@ -853,21 +854,18 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 	break_after = np.nonzero(np.diff(positions) != step )[0]#finds the indices of positions at which positional difference is not 1 meaning they are non-adjacent, and possibly interrupted by introns
 	block_starts = np.concatenate(([0], break_after + 1))#indices of contiguous block starts
 	block_ends = np.concatenate((break_after + 1,[positions.size]))#indices of contiguous block ends
-	print(f'blocks: {len(block_starts)}  (lookahead={lookahead}, '
-		  f'need >= {2 * lookahead} positions per block)')
+	#print(f'blocks: {len(block_starts)}  (lookahead={lookahead}, ' f'need >= {2 * lookahead} positions per block)')
 	candidates = []
 	for b, (s,e) in enumerate(zip(block_starts, block_ends)):#list of start, stop block pairs (tuples) to find accelerated tss in each block
 		block_pos = positions[s:e]
 		block_vals = values[s:e]
-		print(f'  block {b}: {block_pos[0]}-{block_pos[-1]}  n={block_pos.size}  '
-			  f'cov {block_vals.min():.0f}-{block_vals.max():.0f}  '
-			  f'mean={block_vals.mean():.1f}')
+		#print(f'  block {b}: {block_pos[0]}-{block_pos[-1]}  n={block_pos.size}  ' f'cov {block_vals.min():.0f}-{block_vals.max():.0f}  ' f'mean={block_vals.mean():.1f}')
 		if block_pos.size < 2*lookahead:#block size should be greater than twice of the look ahead value since only then coverage change before and after the lookahead can be evaluated
 			print(f'    SKIP: too short ({block_pos.size} < {2 * lookahead})')
 			continue
 		consecutive_cov_differences = np.insert(np.ediff1d(block_vals),0,0)#insert 0 in the first position to make it parallel to block_pos
 		cumulative_sum_of_cov_diff = np.cumsum(np.abs(consecutive_cov_differences))#cumulative sum of absolute coverage differences
-		print(f'    total abs change = {cumulative_sum_of_cov_diff.max():.0f}')
+		#print(f'    total abs change = {cumulative_sum_of_cov_diff.max():.0f}')
 		if cumulative_sum_of_cov_diff.max() == 0:
 			print('    SKIP: coverage perfectly flat')
 			continue
@@ -878,18 +876,17 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 			print('    SKIP: KS gate')
 			continue
 		candidate_index = int(np.argmax(line_dist_array))#index of the point with max distance from diagonal line
-		print(f'    argmax at index {candidate_index} -> position {block_pos[candidate_index]}'
-			  f'  (line_dist max={line_dist_array.max():.4f}, min={line_dist_array.min():.4f})')
+		#print(f'    argmax at index {candidate_index} -> position {block_pos[candidate_index]}' f'  (line_dist max={line_dist_array.max():.4f}, min={line_dist_array.min():.4f})')
 		#w = min(lookahead, candidate_index, block_pos.size - candidate_index)
 		w = min(max(lookahead, int(0.1*block_pos.size)), candidate_index, block_pos.size - candidate_index)#redefining comparison window to account for candidate block length and in turn its ramp increase pattern to find accelerated tss in a better way; maybe try to provide0.1 i.e. 10% of the block to be a user-tunable parameter later?
-		print(f'    comparison window w = {w}')
+		#print(f'    comparison window w = {w}')
 		if w < 2:
 			print('    SKIP: candidate too close to block edge')
 			continue
 		cov_before = block_vals[candidate_index - w:candidate_index]
 		cov_after = block_vals[candidate_index: candidate_index + w]
-		print(f'    before: mean={cov_before.mean():.1f} std={cov_before.std():.1f}')
-		print(f'    after : mean={cov_after.mean():.1f} std={cov_after.std():.1f}')
+		#print(f'    before: mean={cov_before.mean():.1f} std={cov_before.std():.1f}')
+		#print(f'    after : mean={cov_after.mean():.1f} std={cov_after.std():.1f}')
 		if np.std(cov_before) == 0 and np.std(cov_after) == 0:
 			print('    SKIP: both sides have zero variance')
 			continue
@@ -908,7 +905,7 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 		print(f'    PASS -> candidate at {block_pos[candidate_index]}')
 		candidates.append((log2fc, int(block_pos[candidate_index]), t_pval))
 	if not candidates:
-		print(f'No accelerated TSS found for {gene}.')
+		print(f'No acceleration point found for {gene}.')
 		return None
 	best_fold_change, best_pos, best_p = max(candidates, key=lambda c:c[0])
 	if len(candidates) > 1:
@@ -960,7 +957,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos,percentdiff_threshold,ttest_pval_threshold,foldchange_threshold):
+					 gene_atg_dic, cds_infos,percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction):
 	"""! @brief run analysis on forward strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -1115,7 +1112,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		else:
 			final_pos_status = True
 
-	print("Walk TSS position of " + gene + ": " + str(most_upstream_pos))
+	print("Walk determined edge position of " + gene + ": " + str(most_upstream_pos))
 	walk_tss = most_upstream_pos
 	# collect the intron positions as a set
 	intron_pos_set = set()
@@ -1170,9 +1167,11 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		valid = np.diff(np.array(count_prefix[lo:hi + 1])).astype(bool)
 		filtered_positions = positions[valid]
 		filtered_covs = values[valid]
+		"""
 		print(f'slice called: lo_pos={lo_pos} hi_pos={hi_pos} '
 			  f'(lo={lo} hi={hi}) -> arange gave {positions.size}, '
 			  f'{len(filtered_positions)} after filtering')
+		"""
 		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
 	#the repositioning strategy did not work out so commenting it
 	"""
@@ -1230,7 +1229,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		if psig < pvalue:
 			print(f'psig is {psig}')
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
-				print("No window sliding happened. TSS based on coverage walk only.")
+				print("No window sliding happened. TSS analysis based on coverage walk only.")
 				elevated_tss = most_upstream_pos
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(elevated_tss, start)
 				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold,foldchange_threshold)
@@ -1273,7 +1272,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 					most_upstream_pos = most_upstream_pos + slide_step
 					window_starts.append(most_upstream_pos)
 					if most_upstream_pos > start:
-						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the edge point in the basal region from coverage walk.')
 						basal_tss = walk_tss
 						coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(basal_tss, start)
 						accelerated_basal_tss = get_accelerated_tss(ks_pval, gene,coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold, foldchange_threshold)
@@ -1287,7 +1286,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 			most_upstream_pos = most_upstream_pos + slide_step
 			window_starts.append(most_upstream_pos)
 			if most_upstream_pos > start:
-				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the edge point in the basal region from coverage walk.')
 				basal_tss = walk_tss
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(basal_tss, start)
 				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '+',ttest_pval_threshold, foldchange_threshold)
@@ -1302,6 +1301,40 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		accelerated_tss = accelerated_basal_tss
 	if accelerated_tss is None and accelerated_basal_tss is None:
 		accelerated_tss =None
+	#code block to activate the confidence ranking based on boundary_convergence
+	bc_stats = None
+	bc_ranking = None
+	if bc_gene is not None and not bc_gene['low_confidence']:
+		tiers = {'basal': basal_tss, 'elevated': elevated_tss,
+				 'accelerated': accelerated_tss, other_tool: other_tool_tss}
+		tiers = {k: v for k, v in tiers.items() if v}
+		bc_stats = summarize_boundaries(bc_gene['positions'], '+', tiers,cluster_fraction=cluster_fraction, sharpness=sharpness)
+		bc_ranking = pick_dominant_tier(bc_stats, min_fraction=cluster_fraction)
+		if bc_ranking:
+			dominant_tier = bc_ranking['dominant_tier']  # basal/elevated/accelerated tier name
+			dominant_tss = bc_ranking['dominant_tss']  # genomic position of the tss
+		else:
+			print(f'Dominant TSS analysis from boundary convergence inconclusive. Falling back to fixed order of confidence assignment.')
+			if accelerated_tss:
+				dominant_tier='accelerated'
+				dominant_tss = accelerated_tss
+			elif elevated_tss and accelerated_tss is None:
+				dominant_tier='elevated'
+				dominant_tss = elevated_tss
+			elif basal_tss and elevated_tss is None and accelerated_tss is None:
+				dominant_tier='basal'
+				dominant_tss = basal_tss
+	else:
+		print(f'Confidence ranking based on fixed order of confidence assignment.')
+		if accelerated_tss:
+			dominant_tier = 'accelerated'
+			dominant_tss = accelerated_tss
+		elif elevated_tss and accelerated_tss is None:
+			dominant_tier = 'elevated'
+			dominant_tss = elevated_tss
+		elif basal_tss and elevated_tss is None and accelerated_tss is None:
+			dominant_tier = 'basal'
+			dominant_tss = basal_tss
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1403,6 +1436,11 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		generate_plot(other_tool, other_tool_tss_pos, values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot, introns_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
+	if bc_stats is not None:
+		try:
+			plot_boundary_convergence(gene, '+', bc_gene, bc_stats, bc_ranking, fig_file[:-4] + '_boundary_convergence.png')
+		except Exception as e:
+			print("ERROR: boundary convergence plot failed " + gene + " " + str(e))
 
 	basal_tss_yr_compliant = False
 	elevated_tss_yr_compliant = False
@@ -1439,7 +1477,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold):
+					 gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction):
 	"""! @brief run analysis on reverse strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -1582,7 +1620,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		else:
 			final_pos_status = True
 
-	print("Walk TSS position of " + gene + ": " + str(most_downstream_pos))
+	print("Walk determined edge position of " + gene + ": " + str(most_downstream_pos))
 	walk_tss = most_downstream_pos
 
 	# collect the intron positions as a set
@@ -1635,9 +1673,11 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		valid = np.diff(np.array(count_prefix[idx_start:idx_end + 2])).astype(bool)
 		filtered_positions = positions[valid]
 		filtered_covs = values[valid]
+		"""
 		print(f'slice called: lo_pos={lo_pos} hi_pos={hi_pos} '
 			  f'(lo={idx_start} hi={idx_end}) -> arange gave {positions.size}, '
 			  f'{len(filtered_positions)} after filtering')
+		"""
 		return list(zip(filtered_positions.tolist(), filtered_covs.tolist())), filtered_covs
 
 
@@ -1663,7 +1703,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		if psig < pvalue:
 			print(f'psig is {psig}')
 			if window_pass == 0:  # the window of the walk-based TSS itself is in the signal region
-				print("No window sliding happened. TSS based on coverage walk only.")
+				print("No window sliding happened. TSS analysis based on coverage walk only.")
 				elevated_tss = most_downstream_pos
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, elevated_tss)
 				accelerated_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold,foldchange_threshold)
@@ -1705,7 +1745,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					most_downstream_pos = most_downstream_pos - slide_step
 					window_starts.append(most_downstream_pos)
 					if most_downstream_pos < end:
-						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+						print(f'Caution: No sustained signal region found upstream of {gene}. Returning only the edge point in the basal region from coverage walk.')
 						basal_tss = walk_tss
 						coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, basal_tss)
 						accelerated_basal_tss = get_accelerated_tss(ks_pval, gene,coverage_slice_list_for_accelerated_tss_arr, lookahead,coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold, foldchange_threshold)
@@ -1718,7 +1758,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 			most_downstream_pos = most_downstream_pos - slide_step
 			window_starts.append(most_downstream_pos)
 			if most_downstream_pos < end:
-				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the basal TSS from coverage walk.')
+				print(f'Caution: No background elevated signal region found upstream of {gene}. Returning only the edge point in the basal region from coverage walk.')
 				basal_tss = walk_tss
 				coverage_slice_list_for_accelerated_tss, coverage_slice_list_for_accelerated_tss_arr = accelerated_tss_slice(end, basal_tss)
 				accelerated_basal_tss = get_accelerated_tss(ks_pval, gene, coverage_slice_list_for_accelerated_tss_arr,lookahead, coverage_slice_list_for_accelerated_tss, '-',ttest_pval_threshold, foldchange_threshold)
@@ -1734,6 +1774,41 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		accelerated_tss = accelerated_basal_tss
 	if accelerated_tss is None and accelerated_basal_tss is None:
 		accelerated_tss =None
+
+	#code block to activate the confidence ranking based on boundary_convergence
+	bc_stats = None
+	bc_ranking = None
+	if bc_gene is not None and not bc_gene['low_confidence']:
+		tiers = {'basal': basal_tss, 'elevated': elevated_tss,
+				 'accelerated': accelerated_tss, other_tool: other_tool_tss}
+		tiers = {k: v for k, v in tiers.items() if v}
+		bc_stats = summarize_boundaries(bc_gene['positions'], '-', tiers,cluster_fraction=cluster_fraction, sharpness=sharpness)
+		bc_ranking = pick_dominant_tier(bc_stats, min_fraction=cluster_fraction)
+		if bc_ranking:
+			dominant_tier = bc_ranking['dominant_tier']  # basal/elevated/accelerated tier name
+			dominant_tss = bc_ranking['dominant_tss']  # genomic position of the tss
+		else:
+			print(f'Dominant TSS analysis from boundary convergence inconclusive. Falling back to fixed order of confidence assignment.')
+			if accelerated_tss:
+				dominant_tier='accelerated'
+				dominant_tss = accelerated_tss
+			elif elevated_tss and accelerated_tss is None:
+				dominant_tier='elevated'
+				dominant_tss = elevated_tss
+			elif basal_tss and elevated_tss is None and accelerated_tss is None:
+				dominant_tier='basal'
+				dominant_tss = basal_tss
+	else:
+		print(f'Confidence ranking based on fixed order of confidence assignment.')
+		if accelerated_tss:
+			dominant_tier = 'accelerated'
+			dominant_tss = accelerated_tss
+		elif elevated_tss and accelerated_tss is None:
+			dominant_tier = 'elevated'
+			dominant_tss = elevated_tss
+		elif basal_tss and elevated_tss is None and accelerated_tss is None:
+			dominant_tier = 'basal'
+			dominant_tss = basal_tss
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1836,6 +1911,11 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		generate_plot(other_tool, other_tool_tss_pos,values, svalues, fig_file, atg_pos, cov_walk_start, boundary_tss_for_plot, basal_tss_pos, elevated_tss_pos, accelerated_tss_pos, genomic_start, genomic_end, gene,orientation, dna_sequence_for_plot, mrnas_to_plot, cds_to_plot, five_utr_to_plot, introns_to_plot)
 	except:
 		print("ERROR: plot failed" + gene)
+	if bc_stats is not None:
+		try:
+			plot_boundary_convergence(gene, '-', bc_gene, bc_stats, bc_ranking, fig_file[:-4] + '_boundary_convergence.png')
+		except Exception as e:
+			print("ERROR: boundary convergence plot failed " + gene + " " + str(e))
 
 	basal_tss_yr_compliant = False
 	elevated_tss_yr_compliant = False
@@ -2361,6 +2441,9 @@ def main( arguments ):
 	else:
 		default_ratio = 2.0
 
+	# these two variables are being set for integrating with the boundary convergence helper module
+	individual_aligned_cov_folder = None
+	individual_spanning_cov_folder = None
 	parallelize_cov_generation = False
 	if '--bam' in arguments:
 		bam_file = arguments[ arguments.index('--bam')+1 ]
@@ -2425,6 +2508,9 @@ def main( arguments ):
 		if not os.path.exists(spanning_read_coverage):
 			os.makedirs(spanning_read_coverage)
 			scov_file = construct_coverage_files (bam_list, bam_files, spanning_read_coverage, bedtools, parallelize_cov_generation, parallel,t, tss_scoring, 'spanning')
+		if parallelize_cov_generation == True:
+			individual_aligned_cov_folder = aligned_read_coverage
+			individual_spanning_cov_folder = spanning_read_coverage
 		t_cov_end = time.perf_counter()
 		time_cov_file_creation = t_cov_end - t_cov_start
 		print(f'time taken for cov and scov file generation is {time_cov_file_creation} seconds')
@@ -2438,6 +2524,8 @@ def main( arguments ):
 		elif os.path.isdir(coverage_file) and os.path.isdir(scoverage_file):
 			input_aligned_read_coverage = coverage_file
 			input_spanning_read_coverage = scoverage_file
+			individual_aligned_cov_folder = input_aligned_read_coverage
+			individual_spanning_cov_folder = input_spanning_read_coverage
 			aligned_read_coverage = os.path.join(output_folder, 'Aligned_reads_cov')
 			if not os.path.exists(aligned_read_coverage):
 				os.makedirs(aligned_read_coverage)
@@ -2662,6 +2750,21 @@ def main( arguments ):
 	else:
 		intergenic_buffer = 500
 
+	if '--cluster_fraction' in arguments:#flag to determine the min fraction of walk points to form a cluster in the boundary convergence module
+		cluster_fraction = float(arguments[arguments.index('--cluster_fraction')+1])
+	else:
+		cluster_fraction = 0.1
+
+	if '--sharpness' in arguments:#how sharp should a cluster be to be called focussed in the boundary convergence module
+		sharpness = int(arguments[arguments.index('--sharpness')+1])
+	else:
+		sharpness = 50
+
+	if '--sample_floor' in arguments:#minimum number of samples needed to turn on individual sample-based boundary convergence analysis
+		min_samples = int(arguments[arguments.index('--sample_floor')+1])
+	else:
+		min_samples = 50
+
 	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
 	if run_mode == 'make_bam':
 		#Calculating the optimal intron size for the species to be analysed
@@ -2819,8 +2922,9 @@ def main( arguments ):
 				os.makedirs(spanning_read_coverage)
 				scov_file = construct_coverage_files (bam_list, bam_files, spanning_read_coverage, bedtools, parallelize_cov_generation,parallel, t, tss_scoring, 'spanning')
 
+	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, protein_coding_genes_per_chromosome = load_gene_infos( protein_encoding, gff_file, child_attribute, child_parent_linker, parent_attribute )
+	genome_seq, seq_counter = load_sequences( fasta_file )
 	# --- load data --- #
-
 	coverage = load_coverage( cov_file)
 	scoverage = load_coverage( scov_file)
 
@@ -2841,10 +2945,11 @@ def main( arguments ):
 	for contig in coverage_dic:
 		lookup_dic[contig] = dict(coverage_dic[contig])
 
-	gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, protein_coding_genes_per_chromosome = load_gene_infos( protein_encoding, gff_file, child_attribute, child_parent_linker, parent_attribute )
-	genome_seq, seq_counter = load_sequences( fasta_file )
+
+	"""
 	intron_ratio_threshold = compute_intron_ratio_threshold(gff_file, child_parent_linker, coverage, scoverage, intron_ratio_percentile, edge_trim,min_total_positions, default_ratio)
 	print(f'Intron spanning/aligned ratio threshold inferred from the annotation is {intron_ratio_threshold}x')
+	"""
 	t_intergenic_start = time.perf_counter()
 	print(f'Retrieving intergenic background seqs')
 	intergenic_window_coverages, z_ig, ig_percent_zero, ig_percent_nonzero = get_intergenic_background_seqs(output_folder, coverage_dic, intergenic_buffer, intergenic_region_size,genes_per_chromosome, gene_infos)
@@ -2862,7 +2967,35 @@ def main( arguments ):
 		bg_scores = compute_background_moods_scores(background_seqs, pfm_config_dic, tmp_folder, output_folder, moods,pvalue)
 		print("Completed MOODS scoring of background seqs.")
 
+	#optional boundary convergence module for confidence ranking when sample input number is greater than minimum sample floor
+	bc_results = None
+	covfiles = [f for f in os.listdir(individual_aligned_cov_folder) if f.endswith(".cov")]
+	scovfiles =  [f for f in os.listdir(individual_spanning_cov_folder) if f.endswith(".cov")]
+	bc_results = None
+	if individual_aligned_cov_folder and individual_spanning_cov_folder:
+		if len(covfiles) >= min_samples and len(scovfiles) >=min_samples:#number of individual samples must be greater than sample floor
+			shared = dict(gene_infos=gene_infos, genes_per_chromosome=genes_per_chromosome,
+						  protein_coding_genes_per_chromosome=protein_coding_genes_per_chromosome,
+						  transcripts_per_gene=transcripts_per_gene, five_utr_infos=five_utr_infos,
+						  cds_infos=cds_infos, genome_seq=genome_seq)
+			params = dict(protein_encoding=protein_encoding, coverage_walk_origin=coverage_walk_origin,
+						  window=window, mincov=mincov, min_exon_size=min_exon_size,
+						  tolerated_gap=tolerated_gap, splicesites=splicesites,
+						  percentdiff_threshold=percentdiff_threshold, intergenic_buffer=intergenic_buffer,
+						  intergenic_region_size=intergenic_region_size,
+						  background_percentage=background_percentage)
+			helpers = dict(find_flanking_genes=find_flanking_genes, get_overlap_type=get_overlap_type)
+			bc_results = run_boundary_convergence(
+				list_sample_cov_files(individual_aligned_cov_folder),
+				list_sample_cov_files(individual_spanning_cov_folder),
+				goi, shared, params, helpers, output_folder, n_workers=t,
+				cluster_fraction=cluster_fraction, sharpness=sharpness)
+
 	# run analysis per gene of interest
+	boundary_positions_dic = {}  # walk TSS positions of gene in all individual samples
+	boundary_low_conf_dic = {}  # True / False for low confidence if the gene is lowly expressed in many samples
+	boundary_stats_dic = {}  # summary statistics of the boundary convergence plot
+	boundary_ranking_dic = {}  # tier ranking and dominant tss determination
 	gene_exp_status_dic = {}
 	inflection_dic = {}
 	candidate_tss_dic = {}
@@ -2890,6 +3023,14 @@ def main( arguments ):
 	textract = 0
 	t_tss_start_analysis = time.perf_counter()
 	for gene in goi:
+		#consolidation of results from boundary convergence tests
+		bc_gene = None
+		if bc_results and bc_results['status'] == 'ok':
+			bc_gene = bc_results['genes'].get(gene)
+			if bc_gene:
+				boundary_positions_dic[gene] = bc_gene['positions']
+				boundary_low_conf_dic[gene] = bc_gene['low_confidence']
+
 		if protein_encoding == "yes":
 			if gene not in transcripts_per_gene:
 				print(f'You chose only protein encoding gene analysis mode. But your GOI {gene} not found in protein-encoding gene group. Skipping TSS analysis for {gene}\n')
@@ -3006,7 +3147,7 @@ def main( arguments ):
 					hard_cutoff = 1
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction)
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
@@ -3070,7 +3211,7 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
