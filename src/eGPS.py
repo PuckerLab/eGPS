@@ -1302,6 +1302,8 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 	if accelerated_tss is None and accelerated_basal_tss is None:
 		accelerated_tss =None
 	#code block to activate the confidence ranking based on boundary_convergence
+	dominant_tss = None
+	dominant_tier = None
 	bc_stats = None
 	bc_ranking = None
 	if bc_gene is not None and not bc_gene['low_confidence']:
@@ -1335,6 +1337,9 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		elif basal_tss and elevated_tss is None and accelerated_tss is None:
 			dominant_tier = 'basal'
 			dominant_tss = basal_tss
+	confidence = 'High'
+	if dominant_tss == hard_cutoff:
+		confidence = "Low"
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1442,6 +1447,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		except Exception as e:
 			print("ERROR: boundary convergence plot failed " + gene + " " + str(e))
 
+	"""
 	basal_tss_yr_compliant = False
 	elevated_tss_yr_compliant = False
 	accelerated_tss_yr_compliant = False
@@ -1468,8 +1474,9 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 			other_tool_tss_yr_compliant = True
 	else:
 		other_tool_tss_yr_compliant = 'NA'
+	"""
 
-	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence
 
 
 def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, pvalue,
@@ -1776,6 +1783,8 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		accelerated_tss =None
 
 	#code block to activate the confidence ranking based on boundary_convergence
+	dominant_tier = None
+	dominant_tss = None
 	bc_stats = None
 	bc_ranking = None
 	if bc_gene is not None and not bc_gene['low_confidence']:
@@ -1809,6 +1818,9 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		elif basal_tss and elevated_tss is None and accelerated_tss is None:
 			dominant_tier = 'basal'
 			dominant_tss = basal_tss
+	confidence = 'High'
+	if dominant_tss == hard_cutoff:
+		confidence = "Low"
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1917,6 +1929,8 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		except Exception as e:
 			print("ERROR: boundary convergence plot failed " + gene + " " + str(e))
 
+	"""
+
 	basal_tss_yr_compliant = False
 	elevated_tss_yr_compliant = False
 	accelerated_tss_yr_compliant = False
@@ -1947,8 +1961,9 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 			other_tss_yr_compliant = True
 	else:
 		other_tss_yr_compliant = 'NA'
+	"""
 
-	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant
+	return {'TSS': walk_tss, 'start': start,'end': end}, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence
 
 
 def find_flanking_genes( gene, gene_infos, genes_per_chromosome, window ):
@@ -2365,6 +2380,19 @@ def main( arguments ):
 				other_tss_dic[parts[0]] = int(parts[1])  # first column goi and second column tss position
 	else:
 		other_tss_file = None
+
+	# flag to provide option to fall back to ATG when the dominant TSS is found to be the hard cutoff i.e. low confidence case
+	if '--fall_back_tss' in arguments:#yes / no
+		fallback = arguments[arguments.index('--fall_back_tss')+1]
+	else:
+		fallback = 'yes'
+
+	#flag to make boundary convergence check optional as it is slightly time consuming
+	if '--boundary_convergence' in arguments:#yes/ no
+		boundary_convergence = arguments[arguments.index('--boundary_convergence')+1]
+	else:
+		boundary_convergence = 'yes'
+
 	#gff file config params
 	if '--gff_config' in arguments:
 		gff_config_file = arguments[arguments.index('--gff_config')+1]
@@ -2972,24 +3000,25 @@ def main( arguments ):
 	covfiles = [f for f in os.listdir(individual_aligned_cov_folder) if f.endswith(".cov")]
 	scovfiles =  [f for f in os.listdir(individual_spanning_cov_folder) if f.endswith(".cov")]
 	bc_results = None
-	if individual_aligned_cov_folder and individual_spanning_cov_folder:
-		if len(covfiles) >= min_samples and len(scovfiles) >=min_samples:#number of individual samples must be greater than sample floor
-			shared = dict(gene_infos=gene_infos, genes_per_chromosome=genes_per_chromosome,
-						  protein_coding_genes_per_chromosome=protein_coding_genes_per_chromosome,
-						  transcripts_per_gene=transcripts_per_gene, five_utr_infos=five_utr_infos,
-						  cds_infos=cds_infos, genome_seq=genome_seq)
-			params = dict(protein_encoding=protein_encoding, coverage_walk_origin=coverage_walk_origin,
-						  window=window, mincov=mincov, min_exon_size=min_exon_size,
-						  tolerated_gap=tolerated_gap, splicesites=splicesites,
-						  percentdiff_threshold=percentdiff_threshold, intergenic_buffer=intergenic_buffer,
-						  intergenic_region_size=intergenic_region_size,
-						  background_percentage=background_percentage)
-			helpers = dict(find_flanking_genes=find_flanking_genes, get_overlap_type=get_overlap_type)
-			bc_results = run_boundary_convergence(
-				list_sample_cov_files(individual_aligned_cov_folder),
-				list_sample_cov_files(individual_spanning_cov_folder),
-				goi, shared, params, helpers, output_folder, n_workers=t,
-				cluster_fraction=cluster_fraction, sharpness=sharpness)
+	if boundary_convergence == 'yes':
+		if individual_aligned_cov_folder and individual_spanning_cov_folder:
+			if len(covfiles) >= min_samples and len(scovfiles) >=min_samples:#number of individual samples must be greater than sample floor
+				shared = dict(gene_infos=gene_infos, genes_per_chromosome=genes_per_chromosome,
+							  protein_coding_genes_per_chromosome=protein_coding_genes_per_chromosome,
+							  transcripts_per_gene=transcripts_per_gene, five_utr_infos=five_utr_infos,
+							  cds_infos=cds_infos, genome_seq=genome_seq)
+				params = dict(protein_encoding=protein_encoding, coverage_walk_origin=coverage_walk_origin,
+							  window=window, mincov=mincov, min_exon_size=min_exon_size,
+							  tolerated_gap=tolerated_gap, splicesites=splicesites,
+							  percentdiff_threshold=percentdiff_threshold, intergenic_buffer=intergenic_buffer,
+							  intergenic_region_size=intergenic_region_size,
+							  background_percentage=background_percentage)
+				helpers = dict(find_flanking_genes=find_flanking_genes, get_overlap_type=get_overlap_type)
+				bc_results = run_boundary_convergence(
+					list_sample_cov_files(individual_aligned_cov_folder),
+					list_sample_cov_files(individual_spanning_cov_folder),
+					goi, shared, params, helpers, output_folder, n_workers=t,
+					cluster_fraction=cluster_fraction, sharpness=sharpness)
 
 	# run analysis per gene of interest
 	boundary_positions_dic = {}  # walk TSS positions of gene in all individual samples
@@ -3147,26 +3176,22 @@ def main( arguments ):
 					hard_cutoff = 1
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction)
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction)
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant,elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tool_tss_yr_compliant, hard_cutoff]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence]
 				tss_list = {}
-				if basal_tss:
-					tss_list['basal'] = basal_tss
-				else:
-					tss_list['basal'] = None
-				if elevated_tss:
-					tss_list['elevated'] = elevated_tss
-				else:
-					tss_list['elevated'] = None
-				if accelerated_tss:
-					tss_list['accelerated'] = accelerated_tss
-				else:
-					tss_list['accelerated'] = None
+				if confidence == 'High':
+					if dominant_tss:
+						tss_list['dominant'] = dominant_tss
+					else:
+						tss_list['dominant'] = None
+				elif confidence == 'Low' and fallback == 'yes':
+					print(f'Falling back to most upstream CDS start since the TSS found is of low confidence!')
+					tss_list['dominant'] = result['start']
 				if other_tool_tss:
 					tss_list[other_tool] = other_tool_tss
 				else:
@@ -3211,26 +3236,22 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant, other_tss_yr_compliant = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction )
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant,accelerated_tss_yr_compliant, hard_cutoff]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, basal_tss_yr_compliant, elevated_tss_yr_compliant, accelerated_tss_yr_compliant,other_tss_yr_compliant, hard_cutoff]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence]
 				tss_list = {}
-				if basal_tss:
-					tss_list['basal'] = basal_tss
-				else:
-					tss_list['basal'] = None
-				if elevated_tss:
-					tss_list['elevated'] = elevated_tss
-				else:
-					tss_list['elevated'] = None
-				if accelerated_tss:
-					tss_list['accelerated'] = accelerated_tss
-				else:
-					tss_list['accelerated'] = None
+				if confidence == 'High':
+					if dominant_tss:
+						tss_list['dominant'] = dominant_tss
+					else:
+						tss_list['dominant'] = None
+				elif confidence == 'Low' and fallback == 'yes':
+					print(f'Falling back to most upstream CDS start since the TSS found is of low confidence!')
+					tss_list['dominant'] = result['end']
 				if other_tool_tss:
 					tss_list[other_tool] = other_tool_tss
 				else:
@@ -3303,17 +3324,15 @@ def main( arguments ):
 		with open( final_output_file, "w" ) as out:
 			out.write("\t".join(
 				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
-				 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS",
-				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", "Hard cutoff",
-				 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",
-				 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",
+				 "Walk end", "Hard cutoff", "Edge point", "Elevation point","Acceleration point",
+				 "Potential TSS", "Confidence", "Promoter sequence",
 				 "Additional comments"]) + "\n")
 			for gene in list(results.keys()):
 				final_results = []
 				if gene in results:
 					final_results.extend([gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
-					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][7])])
+					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][6])])
 					if gene in promoter_status_dic:
 						for tss_type, status in promoter_status_dic[gene].items():
 							final_results.append(str(status))
@@ -3325,9 +3344,9 @@ def main( arguments ):
 					out.write("\t".join(str(x) for x in final_results) + "\n")#explicitly converting every result entry into string to avoid boolean value errors
 		if promoter_analysis == 'yes':
 			with open (final_promoter_analysis_file, 'w') as out:
-				out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",
-										"Basal promoter motif score percentile", "Elevated promoter motif score percentile", "Accelerated promoter motif score percentile",
-										"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",])+ "\n")
+				out.write( "\t".join( [ "Promoter motif score",
+										"Promoter motif score percentile",
+										"Promoter canonical hits",])+ "\n")
 				for main_gene in list( results.keys() ):
 					final_results = []
 					for gene, tss_type_dic in motif_scores.items():
@@ -3351,18 +3370,16 @@ def main( arguments ):
 		with open( final_output_file, "w" ) as out:
 			out.write("\t".join(
 				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
-				 "Walk TSS", "Basal TSS", "Elevated TSS","Accelerated TSS", f"{other_tool} TSS",
-				 "Basal TSS YR compliance", "Elevated TSS YR compliance","Accelerated TSS YR compliance", f"{other_tool} TSS YR compliance","Hard cutoff",
-				 "Basal promoter status", "Elevated promoter status", "Accelerated promoter status",f"{other_tool} promoter status",
-				 "Basal promoter sequence", "Elevated promoter sequence", "Accelerated promoter sequence",f"{other_tool} promoter sequence",
+				 "Walk end", "Hard cutoff", "Edge point", "Elevation point", "Acceleration point",
+				 "Potential TSS", "Confidence", f"{other_tool} TSS",
+				 "Promoter sequence",f"{other_tool} promoter sequence",
 				 "Additional comments"]) + "\n")
 			for gene in list(results.keys()):
 				final_results = []
 				if gene in results:
 					final_results.extend([gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
-					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][7]),
-					str(tss_compare_dic[gene][8]), str(tss_compare_dic[gene][9])])
+					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][7]), str(tss_compare_dic[gene][5])])
 					if gene in promoter_status_dic:
 						for tss_type, status in promoter_status_dic[gene].items():
 							final_results.append(str(status))
@@ -3374,9 +3391,9 @@ def main( arguments ):
 					out.write("\t".join(str(x) for x in final_results) + "\n")#explicitly converting every result entry into string to avoid boolean value errors
 		if promoter_analysis == 'yes':
 			with open (final_promoter_analysis_file, 'w') as out:
-				out.write( "\t".join( [ "Basal promoter motif score", "Elevated promoter motif score", "Accelerated promoter motif score",f"{other_tool} TSS promoter motif score",
-										"Basal promoter motif score percentile", "Elevated promoter motif score percentile", "Accelerated promoter motif score percentile", f"{other_tool} TSS promoter motif score percentile",
-										"Basal promoter canonical hits", "Elevated promoter canonical hits", "Accelerated promoter canonical hits",])+ "\n")
+				out.write( "\t".join( [ "Promoter motif score", f"{other_tool} promoter motif score",
+										"Promoter motif score percentile", f"{other_tool} promoter motif score percentile",
+										"Promoter canonical hits",f"{other_tool} promoter canonical hits"])+ "\n")
 				for main_gene in list( results.keys() ):
 					final_results = []
 					for gene, tss_type_dic in motif_scores.items():
