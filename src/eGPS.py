@@ -66,6 +66,7 @@ __usage__ = """
 
 import re, os, sys, subprocess, gzip
 from pathlib import Path
+import pysam
 import bisect
 import random
 import math
@@ -73,7 +74,7 @@ import tempfile
 import time
 import traceback
 import numpy as np
-from mpmath import floor
+#from mpmath import floor
 from scipy import stats
 from scipy.stats import percentileofscore
 import seaborn as sns
@@ -85,6 +86,7 @@ from sum_chunk_seek import run_sum_chunk_seek_parallel
 from concatenate_chunks import concatenate_chunks
 from parallel_coverage_generation import parallelize_coverage_file_generation
 from boundary_convergence_module import run_boundary_convergence, summarize_boundaries, pick_dominant_tier, plot_boundary_convergence,list_sample_cov_files
+from mate_identity import build_mate_identity_counts, reposition_by_mate_identity
 try:
 	import matplotlib.pyplot as plt
 	from matplotlib.lines import Line2D
@@ -905,7 +907,7 @@ def get_accelerated_tss(ks_pval_threshold, gene, coverage_slice_list_for_acceler
 		print(f'    PASS -> candidate at {block_pos[candidate_index]}')
 		candidates.append((log2fc, int(block_pos[candidate_index]), t_pval))
 	if not candidates:
-		print(f'No acceleration point found for {gene}.')
+		#print(f'No acceleration point found for {gene}.')
 		return None
 	best_fold_change, best_pos, best_p = max(candidates, key=lambda c:c[0])
 	if len(candidates) > 1:
@@ -957,7 +959,7 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos,percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction):
+					 gene_atg_dic, cds_infos,percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction,bam_file_grip, compact_genome):
 	"""! @brief run analysis on forward strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -1120,6 +1122,35 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		for p in range(intron_start_key, intron_end_val + 1):
 			intron_pos_set.add(p)  # collect every intronic position
 
+	# --- second pass: who do the reads at the cutoff actually belong to? ---
+	# The walk stopping AT the hard cutoff means it ran out of room, not out of
+	# coverage. Mates anchored inside the GOI vs inside the neighbour tell us where
+	# this gene's own transcript really ends.
+	if compact_genome=='yes' and bam_file_grip is not None and walk_tss == hard_cutoff:
+		gene_list = genes_per_chromosome[contig]
+		gi = gene_list.index(gene)
+		neighbour = gene_list[gi - 1] if gi > 0 else None  # upstream = lower coords on +
+		if neighbour is None:
+			print(f'{gene}: walk TSS at hard cutoff {walk_tss}; no upstream neighbour to compare against')
+		else:
+			nbr_start, nbr_end = gene_infos[neighbour]['start'], gene_infos[neighbour]['end']
+			mate_lo, mate_hi = walk_tss, start          # + strand; reverse: end, walk_tss
+			goi_counts, nbr_counts = build_mate_identity_counts(
+				bam_file_grip, contig, mate_lo, mate_hi,
+				gene_infos[gene]['start'], gene_infos[gene]['end'],
+				nbr_start, nbr_end)
+			scan_positions = list(range(start, walk_tss - 1, -1))      # reverse: range(walk_tss, end - 1, -1)
+			new_pos, goi_share, n_win = reposition_by_mate_identity(
+				goi_counts, nbr_counts, mate_lo, scan_positions,
+				slide_step, window_size=intergenic_region_size,
+				intron_pos_set=intron_pos_set, gene=gene)
+			if new_pos is not None and new_pos != walk_tss:
+				print(f'{gene}: walk TSS at hard cutoff {walk_tss} -> repositioned to {new_pos} '
+					  f'(GOI share {goi_share:.2f} over {n_win} windows)')
+				walk_tss = new_pos
+				most_upstream_pos = new_pos
+	elif compact_genome == 'yes' and bam_file_grip is None and walk_tss == hard_cutoff:
+		print(f'Mate identity based hardcutoff repositioning not possible as required BAM file missing!')
 	# one-time prefix-sum setup, replacing per-window O(W) list rebuilds to speed up the coverage lookups and hence the overall TSS annotation efficiency
 	region_lo = most_upstream_pos
 	built_hi = region_lo  # tracks how far the arrays are currently built -- grows on demand, no longer a fixed ceiling
@@ -1141,14 +1172,14 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 				count_prefix.append(count_prefix[-1])
 		built_hi = new_hi
 
-	initial_hi = start + strength * slide_step + intergenic_region_size  # CHANGED: now just a starting guess, not a hard limit
+	initial_hi = start + strength * slide_step + intergenic_region_size  #just a starting guess, not a hard limit
 	extend_prefix_to(initial_hi)
 
 	def window_avg(pos0):
 		# avg_coverage for the window starting at pos0, or None if fully intronic/absent
 		lo = pos0 - region_lo
 		hi = lo + intergenic_region_size
-		if hi >= len(count_prefix):  # NEW: extend past the guess if this window needs positions not yet built
+		if hi >= len(count_prefix):  #extend past the guess if this window needs positions not yet built
 			extend_prefix_to(region_lo + hi + 1)
 		window_count = count_prefix[hi] - count_prefix[lo]
 		if window_count == 0:
@@ -1337,9 +1368,9 @@ def run_fwd_analysis(other_tool, other_tss_dic,ks_pval, strength, lookahead, out
 		elif basal_tss and elevated_tss is None and accelerated_tss is None:
 			dominant_tier = 'basal'
 			dominant_tss = basal_tss
-	confidence = 'High'
+	confidence = None
 	if dominant_tss == hard_cutoff:
-		confidence = "Low"
+		confidence = "Low confidence TSS"
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -1484,7 +1515,7 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 					 cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size,
 					 hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_genomic_pos, contig,
 					 genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos,
-					 gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction):
+					 gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction,bam_file_grip, compact_genome):
 	"""! @brief run analysis on reverse strand """
 	if gene in other_tss_dic:
 		other_tool_tss = other_tss_dic[gene]
@@ -1635,6 +1666,36 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 	for intron_start_key, intron_end_val in intron_boundary_marker.items():
 		for p in range(intron_start_key, intron_end_val + 1):
 			intron_pos_set.add(p)  # collect every intronic position
+
+	# --- second pass: who do the reads at the cutoff actually belong to? ---
+	# The walk stopping AT the hard cutoff means it ran out of room, not out of
+	# coverage. Mates anchored inside the GOI vs inside the neighbour tell us where
+	# this gene's own transcript really ends.
+	if compact_genome=='yes' and bam_file_grip is not None and walk_tss == hard_cutoff:
+		gene_list = genes_per_chromosome[contig]
+		gi = gene_list.index(gene)
+		neighbour = gene_list[gi + 1] if gi + 1 < len(gene_list) else None
+		if neighbour is None:
+			print(f'{gene}: walk TSS at hard cutoff {walk_tss}; no upstream neighbour to compare against')
+		else:
+			nbr_start, nbr_end = gene_infos[neighbour]['start'], gene_infos[neighbour]['end']
+			mate_lo, mate_hi = end, walk_tss          # + strand; reverse: end, walk_tss
+			goi_counts, nbr_counts = build_mate_identity_counts(
+				bam_file_grip, contig, mate_lo, mate_hi,
+				 gene_infos[gene]['start'], gene_infos[gene]['end'],
+				nbr_start, nbr_end)
+			scan_positions = list(range(end, walk_tss + 1))      # reverse: range(walk_tss, end - 1, -1)
+			new_pos, goi_share, n_win = reposition_by_mate_identity(
+				goi_counts, nbr_counts, mate_lo, scan_positions,
+				slide_step, window_size=intergenic_region_size,
+				intron_pos_set=intron_pos_set, gene=gene)
+			if new_pos is not None and new_pos != walk_tss:
+				print(f'{gene}: walk TSS at hard cutoff {walk_tss} -> repositioned to {new_pos} '
+					  f'(GOI share {goi_share:.2f} over {n_win} windows)')
+				walk_tss = new_pos
+				most_downstream_pos = new_pos
+	elif compact_genome == 'yes' and bam_file_grip is None and walk_tss == hard_cutoff:
+		print(f'Mate identity based hardcutoff repositioning not possible as required BAM file missing!')
 
 	# one-time prefix-sum setup, replacing per-window O(W) list rebuilds to speed up the coverage lookups and hence the overall TSS annotation efficiency
 	region_hi = most_downstream_pos
@@ -1818,9 +1879,9 @@ def run_rev_analysis(other_tool, other_tss_dic, ks_pval, strength, lookahead, ou
 		elif basal_tss and elevated_tss is None and accelerated_tss is None:
 			dominant_tier = 'basal'
 			dominant_tss = basal_tss
-	confidence = 'High'
+	confidence = None
 	if dominant_tss == hard_cutoff:
-		confidence = "Low"
+		confidence = "Low confidence TSS"
 	# --- generate figures to visualize coverage around the TSS for manual inspection --- #
 	tss_list = []
 	if basal_tss:
@@ -2793,6 +2854,18 @@ def main( arguments ):
 	else:
 		min_samples = 50
 
+	if '--compact_genome' in arguments:#flag to indicate whether genome of interest is compact or not meaning one with small intergenic region lengths; options are yes or no
+		compact_genome = arguments[arguments.index('--compact_genome')+1]
+	else:
+		compact_genome = 'no'
+
+	#flag to provide BAM file to be used for mate pair identity check for compact genomes
+	#full path to a sorted BAM file needed
+	if '--bam_file_grip' in arguments:#the BAM file here should be merged sorted BAM file in case the number of individual samples used for the analysis are more than 1; grip in the name is an abbreviation for GOI read identity mate pair method; since bam merging is memory expensive (especially as sample size increases) it is not handled along with eGPS and is out-sourced to the user; the BAM file also needs the BAM index file in the same path!
+		bam_file_grip = arguments[arguments.index('--bam_file_grip')+1]
+	else:
+		bam_file_grip = None
+
 	#code block to do RNAseq mapping of SRA files and then produce the cov files for the tss analysis
 	if run_mode == 'make_bam':
 		#Calculating the optimal intron size for the species to be analysed
@@ -3000,7 +3073,7 @@ def main( arguments ):
 	covfiles = [f for f in os.listdir(individual_aligned_cov_folder) if f.endswith(".cov")]
 	scovfiles =  [f for f in os.listdir(individual_spanning_cov_folder) if f.endswith(".cov")]
 	bc_results = None
-	if boundary_convergence == 'yes':
+	if boundary_convergence == 'yes' and compact_genome == 'no':
 		if individual_aligned_cov_folder and individual_spanning_cov_folder:
 			if len(covfiles) >= min_samples and len(scovfiles) >=min_samples:#number of individual samples must be greater than sample floor
 				shared = dict(gene_infos=gene_infos, genes_per_chromosome=genes_per_chromosome,
@@ -3176,20 +3249,20 @@ def main( arguments ):
 					hard_cutoff = 1
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction)
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_fwd_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder, background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction,bam_file_grip,compact_genome)
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence,orientation]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence,orientation]
 				tss_list = {}
-				if confidence == 'High':
+				if confidence == None:
 					if dominant_tss:
 						tss_list['dominant'] = dominant_tss
 					else:
 						tss_list['dominant'] = None
-				elif confidence == 'Low' and fallback == 'yes':
+				elif confidence == 'Low confidence TSS' and fallback == 'yes':
 					print(f'Falling back to most upstream CDS start since the TSS found is of low confidence!')
 					tss_list['dominant'] = result['start']
 				if other_tool_tss:
@@ -3236,20 +3309,20 @@ def main( arguments ):
 					hard_cutoff = len( seq_per_contig )
 				print(f"hardcutoff of {gene} is set to {hard_cutoff}")
 				tanalysis_start = time.perf_counter()
-				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction )
+				result, walk_tss, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence = run_rev_analysis( other_tool, other_tss_dic, ks_pval, strength, lookahead, output_folder ,background_percentage, intergenic_region_size, slide_step, intergenic_window_coverages, coverage_lookup, gene, cov_per_contig, scov_per_contig, seq_per_contig, start, end, fig_file, mincov, min_exon_size, hard_cutoff, flank_region_for_plot, tolerated_gap, splicesites, atg_pos, contig, genome_seq, gene_infos, genes_per_chromosome, mrna_infos, transcripts_per_gene, five_utr_infos, gene_atg_dic, cds_infos, percentdiff_threshold,ttest_pval_threshold,foldchange_threshold,bc_gene,sharpness,cluster_fraction,bam_file_grip, compact_genome)
 				tanalysis_end = time.perf_counter()
 				tanalysis += (tanalysis_end - tanalysis_start)
 				if not other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, dominant_tss, confidence, orientation]
 				elif other_tss_dic:
-					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence]
+					tss_compare_dic[gene] = [walk_tss, hard_cutoff, basal_tss, elevated_tss, accelerated_tss, other_tool_tss, dominant_tss, confidence, orientation]
 				tss_list = {}
-				if confidence == 'High':
+				if confidence == None:
 					if dominant_tss:
 						tss_list['dominant'] = dominant_tss
 					else:
 						tss_list['dominant'] = None
-				elif confidence == 'Low' and fallback == 'yes':
+				elif confidence == 'Low confidence TSS' and fallback == 'yes':
 					print(f'Falling back to most upstream CDS start since the TSS found is of low confidence!')
 					tss_list['dominant'] = result['end']
 				if other_tool_tss:
@@ -3323,14 +3396,14 @@ def main( arguments ):
 	if not other_tss_dic:
 		with open( final_output_file, "w" ) as out:
 			out.write("\t".join(
-				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
+				["GeneID", "Strand orientation", "Average gene coverage", "Gene expression level", "No.of isoforms",
 				 "Walk end", "Hard cutoff", "Edge point", "Elevation point","Acceleration point",
-				 "Potential TSS", "Confidence", "Promoter sequence",
+				 "Potential TSS", "Caution", "Promoter sequence",
 				 "Additional comments"]) + "\n")
 			for gene in list(results.keys()):
 				final_results = []
 				if gene in results:
-					final_results.extend([gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
+					final_results.extend([gene, str(tss_compare_dic[gene][7]), str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
 					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][6])])
 					if gene in promoter_status_dic:
@@ -3369,15 +3442,15 @@ def main( arguments ):
 	elif other_tss_dic:
 		with open( final_output_file, "w" ) as out:
 			out.write("\t".join(
-				["GeneID", "Average gene coverage", "Gene expression level", "No.of isoforms",
+				["GeneID", "Strand orientation","Average gene coverage", "Gene expression level", "No.of isoforms",
 				 "Walk end", "Hard cutoff", "Edge point", "Elevation point", "Acceleration point",
-				 "Potential TSS", "Confidence", f"{other_tool} TSS",
+				 "Potential TSS", "Caution", f"{other_tool} TSS",
 				 "Promoter sequence",f"{other_tool} promoter sequence",
 				 "Additional comments"]) + "\n")
 			for gene in list(results.keys()):
 				final_results = []
 				if gene in results:
-					final_results.extend([gene, str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
+					final_results.extend([gene, str(tss_compare_dic[gene][8]), str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
 					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][7]), str(tss_compare_dic[gene][5])])
 					if gene in promoter_status_dic:
