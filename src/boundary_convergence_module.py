@@ -750,11 +750,14 @@ TIER_LABELS = {'basal': 'Edge point', 'elevated': 'Elevation point', 'accelerate
 EXPRESSION_COLOURS = {'high': '#2ca02c', 'moderate': '#ff8c00'}  # green / dark orange, as in the earlier batch script
 EXPRESSION_NAMES = {'high': 'High expression', 'moderate': 'Moderate expression'}
 
-def plot_boundary_convergence(gene, orientation, bc_gene, stats, ranking, out_file, dpi=300):
+def plot_boundary_convergence(gene, orientation, bc_gene, stats, ranking, out_file, dpi=300,
+							  hard_cutoff=None, fixed_order_tier=None, cutoff_dominated=False):
 	"""One dot per sample at its walk TSS (samples at the same position are stacked upwards), green for
 	samples where the gene is highly expressed and dark orange where it is moderately expressed.
-	The tier points are vertical lines; the dominant tier is the thick solid one. The legend gives, for
-	every tier, the fraction of samples within +-tolerance of it and its distance from the sample centre."""
+	The tier points are vertical lines; the tier that was finally chosen is the thick solid one (the BC
+	winner, or the fixed-order choice when the hard cutoff dominates). The hard cutoff is a black dashed
+	line. The legend gives, for every tier, the fraction of samples within +-tolerance of it and its
+	distance from the sample centre."""
 	import matplotlib.pyplot as plt
 	from matplotlib.lines import Line2D
 	from matplotlib.ticker import MaxNLocator
@@ -781,16 +784,29 @@ def plot_boundary_convergence(gene, orientation, bc_gene, stats, ranking, out_fi
 			ax.scatter(xs, ys, s=28, color=EXPRESSION_COLOURS[category], alpha=0.85, edgecolors='none', zorder=3,
 					   label=f'{EXPRESSION_NAMES[category]} (n={len(xs)})')
 
-	dominant_tier = ranking['dominant_tier'] if ranking else None
+	# the highlighted tier is the one that was actually chosen
+	if cutoff_dominated:
+		highlight_tier = fixed_order_tier
+		highlight_note = '<- fixed-order choice'
+	else:
+		highlight_tier = ranking['dominant_tier'] if ranking else None
+		highlight_note = '<- dominant'
+
 	tier_handles = []
+	n_at_cutoff = 0
+	if hard_cutoff is not None:
+		n_at_cutoff = sum(1 for v in positions.values() if abs(v - hard_cutoff) <= tolerance)
+		ax.axvline(hard_cutoff, color='black', linestyle='--', linewidth=1, zorder=2.5)
+		tier_handles.append(Line2D([0], [0], color='black', linestyle='--', linewidth=1,
+								   label=f'hard cutoff {hard_cutoff:.12g}: {n_at_cutoff} of {stats["n"]} samples within \u00b1{tolerance:g} bp'))
 	ax.axvline(centre, color='grey', linestyle='-.', linewidth=1, zorder=1)
 	tier_handles.append(Line2D([0], [0], color='grey', linestyle='-.', linewidth=1,
 							   label=f'sample centre {centre:.12g}  (n={stats["n"]}, w50={stats["w50"]:.12g} bp)'))
 	for tier, info in stats['tiers'].items():
 		colour = TIER_COLOURS.get(tier, OTHER_TOOL_COLOUR)
-		is_dominant = tier == dominant_tier
-		ax.axvline(info['value'], color=colour, linestyle='-' if is_dominant else ':',
-				   linewidth=2.6 if is_dominant else 1.4, zorder=2)
+		is_highlight = tier == highlight_tier
+		ax.axvline(info['value'], color=colour, linestyle='-' if is_highlight else ':',
+				   linewidth=2.6 if is_highlight else 1.4, zorder=2)
 		offset = info['upstream_offset']  # positive: the samples lie further upstream than the tier
 		if offset > 0:
 			where = f'{offset:.12g} bp downstream of centre'
@@ -799,35 +815,46 @@ def plot_boundary_convergence(gene, orientation, bc_gene, stats, ranking, out_fi
 		else:
 			where = 'at centre'
 		label = f'{TIER_LABELS.get(tier, tier)} {info["value"]:.12g}: {info["fraction_within"]:.2f} of samples within \u00b1{tolerance:g} bp, {where}'
-		if is_dominant:
-			label += '   <- dominant'
-		tier_handles.append(Line2D([0], [0], color=colour, linestyle='-' if is_dominant else ':',
-								   linewidth=2.6 if is_dominant else 1.4, label=label))
+		if is_highlight:
+			label += f'   {highlight_note}'
+		tier_handles.append(Line2D([0], [0], color=colour, linestyle='-' if is_highlight else ':',
+								   linewidth=2.6 if is_highlight else 1.4, label=label))
 
 	ax.set_ylim(0, (max_height + 1) / 0.5)  # empty space above the dots for the legend
 	ax.yaxis.set_major_locator(MaxNLocator(integer=True))
 	ax.ticklabel_format(axis='x', useOffset=False, style='plain')
 	every_x = list(positions.values()) + [info['value'] for info in stats['tiers'].values()]
+	if hard_cutoff is not None and n_at_cutoff > 0:
+		every_x.append(hard_cutoff)
 	pad = max(5, 0.05 * (max(every_x) - min(every_x)))
 	ax.set_xlim(min(every_x) - pad, max(every_x) + pad)
 	ax.set_xlabel('Walk TSS' + ('   (minus strand gene: upstream is to the right)' if orientation == '-' else ''))
 	ax.set_ylabel('Number of samples (stacked)')
-	if ranking and ranking['supported']:
-		verdict = f'dominant point: {TIER_LABELS.get(dominant_tier, dominant_tier)} ({ranking["fraction_within"]:.2f} of samples within \u00b1{tolerance:g} bp)'
-		if ranking['tied_with']:
-			verdict += f'; within \u00b1{tolerance:g} bp of it: {", ".join(TIER_LABELS.get(t, t) for t in ranking["tied_with"])}'
-	elif ranking and ranking['ranking']:
-		verdict = f'no point supported by the samples (best: {TIER_LABELS.get(ranking["ranking"][0]["tier"], ranking["ranking"][0]["tier"])}, {ranking["fraction_within"]:.2f})'
+
+	# two-line title
+	fixed_label = TIER_LABELS.get(fixed_order_tier, fixed_order_tier) if fixed_order_tier else 'no tier available'
+	if cutoff_dominated:
+		line1 = f'{gene} ({orientation}): hard cutoff dominates ({n_at_cutoff} of {stats["n"]} samples)'
+		line2 = f'fixed-order assignment used: {fixed_label}'
 	else:
-		verdict = 'no point to compare with'
-	ax.set_title(f'{gene} ({orientation}): {stats["promoter"]}\n{verdict}', fontsize=11)
+		line1 = f'{gene} ({orientation}): {stats["promoter"]}'
+		if ranking and ranking['supported']:
+			line2 = f'dominant point: {TIER_LABELS.get(ranking["dominant_tier"], ranking["dominant_tier"])} ({ranking["fraction_within"]:.2f} of samples within \u00b1{tolerance:g} bp)'
+			if ranking['tied_with']:
+				line2 += f'; within \u00b1{tolerance:g} bp of it: {", ".join(TIER_LABELS.get(t, t) for t in ranking["tied_with"])}'
+		elif ranking and ranking['ranking']:
+			best = ranking['ranking'][0]['tier']
+			line2 = (f'no point supported (best: {TIER_LABELS.get(best, best)}, {ranking["fraction_within"]:.2f}); '
+					 f'fixed order used: {fixed_label}')
+		else:
+			line2 = 'no point to compare with'
+	ax.set_title(f'{line1}\n{line2}', fontsize=11)
 
 	first_legend = ax.legend(handles=tier_handles, loc='upper left', fontsize=8, frameon=True, framealpha=0.9)
 	ax.add_artist(first_legend)
 	ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False)
 	fig.savefig(out_file, dpi=dpi, bbox_inches='tight')
 	plt.close(fig)
-
 
 # entry point
 def run_boundary_convergence(sample_cov_files, sample_scov_files, goi, shared, params, helpers, out_folder,
