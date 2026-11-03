@@ -3501,9 +3501,11 @@ def main( arguments ):
 					final_results.extend([gene, str(tss_compare_dic[gene][7]), str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
 					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][10]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][8]), str(tss_compare_dic[gene][9])])
+					"""
 					if gene in promoter_status_dic:
 						for tss_type, status in promoter_status_dic[gene].items():
 							final_results.append(str(status))
+					"""
 
 					if gene in promoter_dic:
 						for tss_type, seq in promoter_dic[gene].items():
@@ -3548,9 +3550,11 @@ def main( arguments ):
 					final_results.extend([gene, str(tss_compare_dic[gene][8]), str(coverage_dic[gene]), str(gene_exp_status_dic[gene]), str(isoforms_dic[gene]),
 					str(tss_compare_dic[gene][0]), str(tss_compare_dic[gene][1]), str(tss_compare_dic[gene][2]), str(tss_compare_dic[gene][3]),
 					str(tss_compare_dic[gene][4]), str(tss_compare_dic[gene][6]), str(tss_compare_dic[gene][11]), str(tss_compare_dic[gene][7]), str(tss_compare_dic[gene][5]), str(tss_compare_dic[gene][9]), str(tss_compare_dic[gene][10])])
+					"""
 					if gene in promoter_status_dic:
 						for tss_type, status in promoter_status_dic[gene].items():
 							final_results.append(str(status))
+					"""
 
 					if gene in promoter_dic:
 						for tss_type, seq in promoter_dic[gene].items():
