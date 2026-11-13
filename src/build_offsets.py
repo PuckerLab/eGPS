@@ -27,13 +27,16 @@ END {
 
 
 def build_offsets(cov_file, chunk_size, cores, out_path):
-	"""Run the awk offset-builder on ONE file, writing the result to out_path."""
+	"""Run the awk offset-builder on ONE file (plain or .gz), writing the result to out_path."""
 	with open(out_path, "w") as out:
+		cat = subprocess.Popen(["gzip", "-cdf", cov_file], stdout=subprocess.PIPE)
 		subprocess.run(
-			["awk", "-v", f"cs={chunk_size}", "-v", f"cores={cores}", AWK_PROGRAM, cov_file],
-			stdout=out,
-			check=True,
+			["awk", "-v", f"cs={chunk_size}", "-v", f"cores={cores}", AWK_PROGRAM],
+			stdin=cat.stdout, stdout=out, check=True,
 		)
+		cat.stdout.close()
+		if cat.wait() != 0:
+			raise subprocess.CalledProcessError(cat.returncode, "gzip -cdf " + cov_file)
 
 
 def run_build_offsets_parallel(cov_files, chunk_size, cores, offsets_dir, parallel):

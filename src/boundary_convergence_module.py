@@ -11,7 +11,7 @@ Boundary convergence module.
 Two stop rules (they apply to the whole run, not to single genes)
   * fewer than `min_samples` individual samples            -> nothing is run
   * walk TSS found in < `min_fraction` of all the samples  -> the gene is flagged low_confidence,
-                                                              no statistics, no plot should be drawn
+															  no statistics, no plot should be drawn
 """
 import bisect
 import contextlib
@@ -34,21 +34,31 @@ def list_sample_cov_files(folder):
 	return sorted(
 		os.path.join(folder, f)
 		for f in os.listdir(folder)
-		if f.endswith('.cov') and f not in CUMULATIVE_FILES
+		if (f.endswith('.cov') or f.endswith('.cov.gz')) and f not in CUMULATIVE_FILES
 	)
+def strip_gz(file_name):
+	"""NAME.cov.gz -> NAME.cov; plain names are returned unchanged."""
+	return file_name[:-3] if file_name.endswith('.gz') else file_name
+
+def list_sample_cov_files(folder):
+	"""..."""
+	files = sorted(
+	   os.path.join(folder, f)
+	   for f in os.listdir(folder)
+	   if (f.endswith('.cov') or f.endswith('.cov.gz')) and f not in CUMULATIVE_FILES
+	)
+	names = [strip_gz(os.path.basename(f)) for f in files]
+	if len(names) != len(set(names)):
+	   raise ValueError(f'A sample is present both as .cov and .cov.gz in {folder}; keep only one.')
+	return files
 
 def pair_sample_files(cov_files, scov_files):
-	"""Pair the aligned and the spanning cov file of each sample. Only two cases are accepted:
-	   NAME.cov          (aligned folder)  <->  NAME.cov           (spanning folder)
-	   NAME_aligned.cov  (aligned folder)  <->  NAME_spanning.cov  (spanning folder)
-	A mix such as NAME_aligned.cov with NAME.cov is not accepted. If any file finds no partner, it
-	stops and lists the files without a partner."""
-	scov_by_file_name = {os.path.basename(f): f for f in scov_files}
+	scov_by_file_name = {strip_gz(os.path.basename(f)): f for f in scov_files}
 	pairs = []
 	partners_used = set()
 	aligned_without_partner = []
 	for cov_file in sorted(cov_files):
-		file_name = os.path.basename(cov_file)
+		file_name = strip_gz(os.path.basename(cov_file))
 		if file_name.endswith('_aligned.cov'):
 			name = file_name[:-len('_aligned.cov')]
 			partner = name + '_spanning.cov'
@@ -645,10 +655,10 @@ def summarize_boundaries(positions, orientation, tiers=None, cluster_gap=10, tol
 	centre       median of the samples inside the narrowest window that holds half of them
 	w50          width (bp) of that window = spread of the dominant group
 	clusters     groups separated by gaps > cluster_gap; only groups of at least
-	             cluster_fraction * n samples are kept  (--cluster_fraction of the main script)
+				 cluster_fraction * n samples are kept  (--cluster_fraction of the main script)
 	tiers        for every pass-1 tier point: upstream_offset (bp, strand-aware: positive = the
-	             boundaries lie further UPSTREAM than the tier, negative = downstream of it) and the
-	             fraction of samples within +-tolerance
+				 boundaries lie further UPSTREAM than the tier, negative = downstream of it) and the
+				 fraction of samples within +-tolerance
 	promoter     provisional label: 'multi-site' (>=2 clusters), 'focused' (w50 <= sharpness, --sharpness of the main script), else 'broad'
 	"""
 	if not positions:
@@ -703,9 +713,9 @@ def pick_dominant_tier(stats, candidates=('basal', 'elevated', 'accelerated'), m
 
 	stats        result of summarize_boundaries(...) called WITH the tier points of the gene
 	candidates   the tiers that can become dominant (the other tool is only shown, never chosen; the
-	             cumulative walk TSS needs no entry of its own, it is the basal or the elevated tier)
+				 cumulative walk TSS needs no entry of its own, it is the basal or the elevated tier)
 	min_fraction a tier is dominant only if at least this fraction of the samples (--cluster_fraction)
-	             have their walk TSS within +-tolerance of it
+				 have their walk TSS within +-tolerance of it
 
 	Ranking: the larger fraction of samples within +-tolerance first; if equal, the tier closer to the
 	sample centre; if still equal (same position), accelerated before elevated before basal.
@@ -862,19 +872,19 @@ def run_boundary_convergence(sample_cov_files, sample_scov_files, goi, shared, p
 							 tier_points=None, **summary_kwargs):
 	"""
 	sample_cov_files / sample_scov_files : lists of per-sample aligned / spanning cov files
-	                                       (see list_sample_cov_files; paired as described in pair_sample_files)
+										   (see list_sample_cov_files; paired as described in pair_sample_files)
 	goi                                  : gene ids, as in the main script
 	shared  : dict with gene_infos, genes_per_chromosome, protein_coding_genes_per_chromosome,
-	          transcripts_per_gene, five_utr_infos, cds_infos, genome_seq  (all already loaded by main)
+			  transcripts_per_gene, five_utr_infos, cds_infos, genome_seq  (all already loaded by main)
 	params  : dict with protein_encoding, coverage_walk_origin, window, mincov, min_exon_size,
-	          tolerated_gap, splicesites, percentdiff_threshold, intergenic_buffer,
-	          intergenic_region_size, background_percentage
+			  tolerated_gap, splicesites, percentdiff_threshold, intergenic_buffer,
+			  intergenic_region_size, background_percentage
 	helpers : dict of the main script's own functions: find_flanking_genes and get_overlap_type
-	          (the coverage loading, intergenic background and expression level are inside this module)
+			  (the coverage loading, intergenic background and expression level are inside this module)
 	tier_points : optional {gene: {'basal': .., 'elevated': .., 'accelerated': .., 'EPD': ..}} from pass 1.
-	          Can be left out and summarize_boundaries() called later, when pass 1 is finished.
+			  Can be left out and summarize_boundaries() called later, when pass 1 is finished.
 	n_workers : samples processed in parallel. Every worker holds the genome-wide cov/scov of one
-	          sample in memory (as the main script does for the merged files), so keep this low.
+			  sample in memory (as the main script does for the merged files), so keep this low.
 
 	Returns {'status', 'n_samples', 'genes': {gene: {...}}, 'skipped_genes', 'errors'}.
 	"""

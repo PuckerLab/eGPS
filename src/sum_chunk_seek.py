@@ -7,6 +7,7 @@ import sys
 import glob
 import os
 import subprocess
+import gzip
 from pathlib import Path
 
 
@@ -14,13 +15,16 @@ def sum_chunk_seek(cov_dir, offsets_dir, idx, chunk_size, out_dir):
 	idx = int(idx)
 	chunk_size = int(chunk_size)
 
-	cov_files = sorted(glob.glob(os.path.join(cov_dir, "*.cov")))
+	cov_files = sorted(
+		f for f in glob.glob(os.path.join(cov_dir, "*.cov")) + glob.glob(os.path.join(cov_dir, "*.cov.gz"))
+		if not os.path.basename(f).startswith("Cumulative_")
+	)
 	handles = []
 	for cov in cov_files:
 		base = os.path.splitext(os.path.basename(cov))[0]
 		with open(os.path.join(offsets_dir, base + ".offsets")) as f:
 			offsets = [int(line) for line in f]
-		fh = open(cov, "rb")
+		fh = gzip.open(cov, "rb") if cov.endswith(".gz") else open(cov, "rb")
 		fh.seek(offsets[idx])
 		handles.append(fh)
 
