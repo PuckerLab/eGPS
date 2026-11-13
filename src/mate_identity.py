@@ -6,9 +6,9 @@ Rationale
 When the coverage walk stops at the hard cutoff it did not terminate on evidence --
 it ran out of room, because the neighbouring gene's coverage never fell below mincov.
 Coverage alone cannot say which gene a read in the intergenic space came from. This is
-a major problem for eukaryotes with compact genoems taht have small intergenic regions
-like Saccharomyces cerevisiae. The method discussed below is hence applicable only
-to compact genome cases and only with paired-end RNA-seq reads.
+a major problem for eukaryotes with compact genomes that have small intergenic regions
+like Saccharomyces cerevisiae and also for genes with small intergenic distance in large eukaryotic genomes.
+ The method discussed below is applicable only with paired-end RNA-seq reads.
 
 Matching the read pair origin with the gene it maps to, can help with this. Both mates of a 
 fragment come from the same transcript, so a mate that lands unambiguously inside 
@@ -25,10 +25,18 @@ compact genomes (short intergenic regions, short 5'UTRs).
 import numpy as np
 import pysam
 
+def mate_end(read):
+	"""1-based inclusive last base of the mate, from the MC (mate CIGAR) tag."""
+	if not read.has_tag("MC"):
+		return None
+	cig = pysam.AlignedSegment()          # throwaway object to parse the CIGAR string
+	cig.cigarstring = read.get_tag("MC")
+	return read.next_reference_start + cig.reference_length   # 0-based exclusive == 1-based inclusive
+
 
 def build_mate_identity_counts(bam_file, contig, region_lo, region_hi,
-                               goi_start, goi_end, nbr_start, nbr_end,
-                               min_mapq=20):
+							   goi_start, goi_end, nbr_start, nbr_end,
+							   min_mapq=20):
 	"""
 	ONE pass over the BAM for this region.
 
@@ -59,13 +67,15 @@ def build_mate_identity_counts(bam_file, contig, region_lo, region_hi,
 			if read.next_reference_id != read.reference_id:
 				continue  # mate on another contig -> chimeric/mismapped, not usable
 
-			mate_pos = read.next_reference_start + 1  # 0-based -> 1-based
-			if goi_start <= mate_pos <= goi_end:
+			m_lo = read.next_reference_start + 1  # 0-based -> 1-based
+			m_hi = mate_end(read) or m_lo  # fall back to the old single-point check if no MC tag
+			if m_lo <= goi_end and m_hi >= goi_start:  # any overlap with the gene
 				diff = goi_diff
-			elif nbr_start <= mate_pos <= nbr_end:
+			elif m_lo <= nbr_end and m_hi >= nbr_start:
 				diff = nbr_diff
 			else:
-				continue  # unassignable
+				continue
+			# unassignable
 
 			# get_blocks() gives the ALIGNED blocks only, so a spliced read does not
 			# count across the intron it skips. reference_start..reference_end would.
@@ -81,8 +91,8 @@ def build_mate_identity_counts(bam_file, contig, region_lo, region_hi,
 
 
 def reposition_by_mate_identity(goi_counts, nbr_counts, region_lo, scan_positions,slide_step,
-                                window_size, intron_pos_set=None,
-                                gene='', verbose=True):
+								window_size, intron_pos_set=None,
+								gene='', verbose=True):
 	"""
 	Walk OUTWARD from the gene toward the hard cutoff and stop where the neighbour
 	takes over the reads. The last position still owned by the GOI is the boundary.
@@ -94,14 +104,14 @@ def reposition_by_mate_identity(goi_counts, nbr_counts, region_lo, scan_position
 	because the scan has already stopped at the crossover.
 
 	scan_positions must be ordered FROM the gene TOWARD the cutoff:
-	    + strand:  range(start, walk_tss - 1, -1)     (descending)
-	    - strand:  range(end,   walk_tss + 1)         (ascending)
+		+ strand:  range(start, walk_tss - 1, -1)     (descending)
+		- strand:  range(end,   walk_tss + 1)         (ascending)
 	The winning window's LAST element is returned -- its outer edge, the furthest
 	point from the gene that the GOI still owns.
 
 	Per window, over the non-intronic positions it contains:
-	    sum(goi) >  sum(nbr)  -> the GOI owns this window; keep going
-	    sum(goi) <= sum(nbr)  -> the neighbour has taken over; stop
+		sum(goi) >  sum(nbr)  -> the GOI owns this window; keep going
+		sum(goi) <= sum(nbr)  -> the neighbour has taken over; stop
 	Note sum(goi) == sum(nbr) == 0 also stops the scan, and that is deliberate: an
 	empty stretch means the GOI's fragments no longer reach here, which is exactly
 	the boundary being looked for.
